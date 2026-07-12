@@ -1,0 +1,1 @@
+- Always answer in bullet points, no paragraphs.

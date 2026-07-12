@@ -1,0 +1,16 @@
+# Secrets
+.env
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
+.venv/
+
+# Vendor clones (clone lại bằng lệnh trong README, không commit vào repo này)
+vendor-deepagents/
+vendor-nemoclaw/
+
+# State/checkpoint sinh ra khi chạy script (không cần commit)
+workspace/*.db
