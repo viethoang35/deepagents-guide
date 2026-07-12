@@ -339,6 +339,7 @@ dependencies = [
     { name = "langgraph-checkpoint-sqlite" },
     { name = "pytest" },
     { name = "python-dotenv" },
+    { name = "requests" },
     { name = "tavily-python" },
 ]
 
@@ -354,6 +355,7 @@ requires-dist = [
     { name = "langgraph-checkpoint-sqlite", specifier = ">=2.0.0" },
     { name = "pytest", specifier = ">=8.0.0" },
     { name = "python-dotenv", specifier = ">=1.2.2" },
+    { name = "requests", specifier = ">=2.32.0" },
     { name = "tavily-python", specifier = ">=0.7.26" },
 ]
 
