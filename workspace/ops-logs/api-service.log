@@ -1,0 +1,13 @@
+2026-07-12T09:00:01Z INFO  request_id=a1b2 GET /health 200 4ms
+2026-07-12T09:00:12Z INFO  request_id=a1b3 GET /orders 200 22ms
+2026-07-12T09:00:47Z INFO  request_id=a1b4 POST /orders 201 88ms
+2026-07-12T09:01:03Z INFO  request_id=a1b5 GET /orders/551 200 15ms
+2026-07-12T09:14:02Z ERROR request_id=a1c0 connection timeout to db-primary after 5000ms
+2026-07-12T09:14:09Z ERROR request_id=a1c1 connection timeout to db-primary after 5000ms
+2026-07-12T09:14:15Z ERROR request_id=a1c2 connection timeout to db-primary after 5000ms
+2026-07-12T09:14:22Z ERROR request_id=a1c3 connection timeout to db-primary after 5000ms
+2026-07-12T09:14:29Z ERROR request_id=a1c4 connection timeout to db-primary after 5000ms
+2026-07-12T09:14:36Z ERROR request_id=a1c5 connection timeout to db-primary after 5000ms
+2026-07-12T09:14:44Z WARN  db-primary connection pool exhausted, 0/20 connections free
+2026-07-12T09:16:01Z INFO  request_id=a1c9 GET /health 200 5ms
+2026-07-12T09:16:30Z INFO  request_id=a1ca GET /orders 200 19ms

@@ -12,10 +12,12 @@ output is documented as-is, including the times it didn't work.
 It goes from a single agent with one tool, to the things a real deployment needs and tutorials
 usually skip: a durable checkpointer, human-in-the-loop approval gates, a real filesystem/shell
 agent that fixes real bugs, cross-thread long-term memory, and a regression eval that caught a
-real difference in behavior between models.
+real difference in behavior between models. Then it applies that hardened base to 3 real
+problems: reviewing a git commit, triaging support tickets against a knowledge base, and
+triaging ops/infra logs.
 
-**Read `README.md` top to bottom** — each step (B1–B8) builds on the previous one. Verified on
-macOS aarch64, Python 3.12, uv 0.11.
+**Read `README.md` top to bottom** — Part 1 (B1–B8) builds the harness step by step; Part 2
+(B9–B11) applies it to real problems. Verified on macOS aarch64, Python 3.12, uv 0.11.
 
 ## Structure
 ```
@@ -28,7 +30,10 @@ deepagents-guide/
 │   ├── B3_nemotron_deep_agent.py  # multi-model: orchestrator + researcher sub-agent (OpenRouter)
 │   ├── B4_hardened_agent.py       # durable checkpointer + human-in-the-loop + lightweight observability
 │   ├── B5_repo_ops_agent.py       # agent reads/edits REAL files + sub-agent runs REAL pytest (on the hardened base)
-│   └── B6_cross_thread_memory.py  # memory=[...]: remembers ACROSS threads (unlike B4's checkpointer, which only remembers within 1 thread)
+│   ├── B6_cross_thread_memory.py  # memory=[...]: remembers ACROSS threads (unlike B4's checkpointer, which only remembers within 1 thread)
+│   ├── B9_pr_review_agent.py      # real-world: reviews a real git diff, posts a HITL-gated review comment
+│   ├── B10_support_triage_agent.py # real-world: answers support tickets grounded in a local knowledge base, escalates what it can't answer
+│   └── B11_ops_infra_triage_agent.py # real-world: triages real log files, files a HITL-gated incident; enforces read-only via FilesystemPermission
 ├── evals/
 │   └── test_repo_ops_eval.py      # pytest: does the B5 agent still fix the bug correctly when you swap models?
 ├── vendor-deepagents/      # clone of langchain-ai/deepagents (e.g. nvidia_deep_agent example)
@@ -175,6 +180,66 @@ Actually verified: running with the 2 default models (`gpt-4o-mini` and `deepsee
 **`gpt-4o-mini` passed but `deepseek-chat-v3` failed** — the deepseek-driven agent didn't finish
 fixing the bug in that run. This is exactly the value of this eval: you find out immediately when
 swapping models breaks something, instead of manually running B5 and reading the log step by step.
+
+## Part 2 — Real-world applications
+
+B1–B8 build the harness. These 3 apply it to actual problems, each reusing the same HITL/
+checkpointer patterns from Part 1 but pointed at a different domain.
+
+## Step 9 — PR/code-review agent
+`B9_pr_review_agent.py` reviews a real git commit instead of fixing a repo directly (unlike B5).
+The orchestrator reads a real `git diff` in a scratch git repo (auto-bootstrapped on first run,
+not committed — see `.gitignore`), delegates to a `ci-runner` sub-agent to run the tests, then
+drafts a review comment — `post_review_comment` is a mocked, HITL-gated tool, same pattern as
+B4's `send_email`. It's instructed to comment, not silently fix the file itself.
+
+```bash
+env -u PYTHONPATH uv run --no-sync .venv/bin/python scripts/B9_pr_review_agent.py
+env -u PYTHONPATH uv run --no-sync .venv/bin/python scripts/B9_pr_review_agent.py --interactive
+```
+
+Verified live: the demo repo's second commit flips `is_even()`'s condition, breaking its test.
+The agent read the diff, correctly diagnosed the bug, and posted a comment naming the exact fix —
+without being told to run the test suite first (it inferred the bug straight from the diff, which
+is a legitimate reviewer move, not a script bug).
+
+## Step 10 — Support-ticket triage agent (retrieval)
+`B10_support_triage_agent.py` fills the one gap B1–B8 never touched: retrieval. It answers
+tickets grounded in a local knowledge base (`workspace/support-docs/`, the same entries as this
+README's "Common errors & fixes" section below), and escalates to a human — `escalate_to_human`
+is HITL-gated — when nothing relevant is found instead of guessing.
+
+`search_docs` is a plain word-overlap ranking over local markdown files, **not** a real
+embedding-based vector store — deliberate, so the demo needs no embeddings API key or new
+dependency while still teaching the retrieval-augmented pattern. Swap in a real vector store
+(e.g. Chroma + embeddings) for production use.
+
+```bash
+env -u PYTHONPATH uv run --no-sync .venv/bin/python scripts/B10_support_triage_agent.py
+```
+
+Verified live with 2 tickets: one covered by the docs (PYTHONPATH error) got a grounded answer;
+one not covered (a Kubernetes deployment request) correctly triggered `escalate_to_human` instead
+of a made-up answer.
+
+## Step 11 — Ops/infra triage agent (enforced read-only)
+`B11_ops_infra_triage_agent.py` explores real log files (`workspace/ops-logs/`) with the built-in
+read-only tools (`ls`/`grep`/`glob`/`read_file`), looks for anomalies across services, and files
+an incident — `create_incident` is HITL-gated, same pattern throughout Part 2.
+
+The new mechanism here: read-only access is enforced by `permissions=[FilesystemPermission(
+operations=["write"], paths=["/**"], mode="deny")]`, not just a system-prompt instruction. This
+denies `write_file`/`edit_file` for every path regardless of what the model attempts.
+
+```bash
+env -u PYTHONPATH uv run --no-sync .venv/bin/python scripts/B11_ops_infra_triage_agent.py
+```
+
+Verified live, twice: (1) the agent correctly found the real anomaly — a burst of `db-primary`
+connection timeouts in `api-service.log` — while ignoring the unrelated, normal
+`worker-service.log`, and filed a `high`-severity incident. (2) A direct adversarial test —
+instructing the agent to call `write_file` on `/hacked.txt`, then retrying `/tmp/hacked.txt` —
+got `Error: permission denied for write` both times, and no file was created on disk.
 
 ## Common errors & fixes
 - `No module named 'pydantic_core._pydantic_core'`: caused by an inherited PYTHONPATH from another venv.

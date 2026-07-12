@@ -1,0 +1,8 @@
+2026-07-12T09:00:05Z INFO  job=send_receipt started
+2026-07-12T09:00:06Z INFO  job=send_receipt completed in 210ms
+2026-07-12T09:05:00Z INFO  job=nightly_cleanup started
+2026-07-12T09:05:41Z INFO  job=nightly_cleanup completed in 41s, removed 128 stale sessions
+2026-07-12T09:10:00Z INFO  job=send_receipt started
+2026-07-12T09:10:00Z INFO  job=send_receipt completed in 190ms
+2026-07-12T09:20:00Z INFO  job=send_receipt started
+2026-07-12T09:20:00Z INFO  job=send_receipt completed in 205ms
