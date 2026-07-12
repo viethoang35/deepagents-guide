@@ -40,13 +40,6 @@ deepagents-guide/
 └── vendor-nemoclaw/        # clone of NVIDIA/nemoclaw-community (secure blueprint)
 ```
 
-`vendor-deepagents/` and `vendor-nemoclaw/` are **not** committed to this repo (see
-`.gitignore`) — they're clones of other people's repos, re-clone them when needed:
-```bash
-git clone https://github.com/langchain-ai/deepagents.git vendor-deepagents
-git clone https://github.com/NVIDIA/nemoclaw-community.git vendor-nemoclaw
-```
-
 ## Quickstart (B1 + B2)
 ```bash
 uv sync                                   # B1: install deps (already synced on this machine)
@@ -250,5 +243,12 @@ got `Error: permission denied for write` both times, and no file was created on 
   `{"name":..., "system_prompt":..., "model":..., "tools":[...]}` (not a `SubAgent(agent=...)` object).
 
 ## Advanced examples (from vendor)
+`vendor-deepagents/` and `vendor-nemoclaw/` are **not** committed to this repo (see
+`.gitignore`) — they're clones of other people's repos (71MB/3.4MB), re-clone them if you
+want to browse these:
+```bash
+git clone https://github.com/langchain-ai/deepagents.git vendor-deepagents
+git clone https://github.com/NVIDIA/nemoclaw-community.git vendor-nemoclaw
+```
 - Multi-model + GPU skills: `vendor-deepagents/examples/nvidia_deep_agent/`
 - Secure blueprint (Deep Agents + OpenShell): `vendor-nemoclaw/examples/harness-engineering-playground/`
