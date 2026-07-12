@@ -16,8 +16,10 @@ real difference in behavior between models. Then it applies that hardened base t
 problems: reviewing a git commit, triaging support tickets against a knowledge base, and
 triaging ops/infra logs.
 
-**Read `README.md` top to bottom** — Part 1 (B1–B8) builds the harness step by step; Part 2
-(B9–B11) applies it to real problems. Verified on macOS aarch64, Python 3.12, uv 0.11.
+**Read `README.md` top to bottom** — Part 1 (Steps 1–8: `B2_*.py`–`B6_*.py` scripts, Step 7
+LangSmith is env-only with no script, Step 8's eval lives in `evals/` not a `B8_*.py` file)
+builds the harness step by step; Part 2 (Steps 9–11: `B9_*.py`–`B11_*.py`) applies it to real
+problems. Verified on macOS aarch64, Python 3.12, uv 0.11.
 
 ## Structure
 ```
@@ -185,6 +187,9 @@ The orchestrator reads a real `git diff` in a scratch git repo (auto-bootstrappe
 not committed — see `.gitignore`), delegates to a `ci-runner` sub-agent to run the tests, then
 drafts a review comment — `post_review_comment` is a mocked, HITL-gated tool, same pattern as
 B4's `send_email`. It's instructed to comment, not silently fix the file itself.
+
+⚠️ Same `LocalShellBackend` as Step 5 — see the sandbox warning there. It applies here too, and
+to `B9_pr_review_agent_live.py` below, which posts a REAL comment on a REAL PR.
 
 ```bash
 env -u PYTHONPATH uv run --no-sync .venv/bin/python scripts/B9_pr_review_agent.py
