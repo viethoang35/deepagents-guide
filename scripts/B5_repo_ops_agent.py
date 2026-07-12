@@ -1,28 +1,30 @@
 """
-B5_repo_ops_agent.py — Repo-ops Deep Agent trên hardened base (Bước 5).
+B5_repo_ops_agent.py — Repo-ops Deep Agent on the hardened base (Step 5).
 
-Orchestrator đọc file THẬT trong `workspace/sample-repo/` (không phải virtual
-filesystem giả lập như B2), ủy quyền cho sub-agent "runner-agent" chạy pytest
-thật qua shell thật, rồi tự sửa file khi test fail. Mọi hành động có side
-effect (sửa file, chạy lệnh shell) đều bị chặn lại chờ người duyệt — dùng lại
-đúng 3 lớp hardening từ B4 (checkpointer, human-in-the-loop, observability).
+The orchestrator reads REAL files in `workspace/sample-repo/` (not a simulated
+virtual filesystem like B2), delegates to a "runner-agent" sub-agent that runs
+real pytest via a real shell, then fixes the file itself when a test fails.
+Every action with a side effect (editing files, running shell commands) is
+blocked pending approval — reusing the exact 3 hardening layers from B4
+(checkpointer, human-in-the-loop, observability).
 
-Backend dùng ở đây là `LocalShellBackend`: filesystem + shell THẬT, KHÔNG có
-sandbox/cách ly nào (đọc kỹ docstring của nó — "unrestricted local shell
-execution"). Layer an toàn duy nhất là:
-  1. `virtual_mode=True` + `root_dir=workspace/sample-repo` -> các tool
-     filesystem (ls/read_file/write_file/edit_file/glob/grep) không thể đi ra
-     ngoài thư mục này (nhưng `execute` KHÔNG bị giới hạn bởi virtual_mode).
-  2. `interrupt_on` bắt buộc duyệt tay cho write_file/edit_file/execute.
-  3. `runner-agent` sub-agent chỉ được hướng dẫn (qua system_prompt) chạy
-     pytest/lint — đây là ràng buộc "soft" (prompt), không phải sandbox
-     thật. Muốn cách ly cứng (Docker/VM), xem `vendor-deepagents/libs/partners/`
-     (modal, runloop, daytona) và extend `BaseSandbox`.
+The backend used here is `LocalShellBackend`: real filesystem + real shell,
+with NO sandbox/isolation at all (read its docstring carefully — "unrestricted
+local shell execution"). The only safety layer is:
+  1. `virtual_mode=True` + `root_dir=workspace/sample-repo` -> the filesystem
+     tools (ls/read_file/write_file/edit_file/glob/grep) can't escape this
+     directory (but `execute` is NOT constrained by virtual_mode).
+  2. `interrupt_on` requires manual approval for write_file/edit_file/execute.
+  3. The `runner-agent` sub-agent is only instructed (via system_prompt) to
+     run pytest/lint — this is a "soft" constraint (a prompt), not a real
+     sandbox. For real isolation (Docker/VM), see
+     `vendor-deepagents/libs/partners/` (modal, runloop, daytona) and extend
+     `BaseSandbox`.
 
-Chạy (demo tự động duyệt):
+Run (auto-approve demo):
   env -u PYTHONPATH uv run --no-sync .venv/bin/python scripts/B5_repo_ops_agent.py
 
-Chạy có duyệt thủ công từng bước (approve/reject qua stdin):
+Run with manual step-by-step approval (approve/reject via stdin):
   env -u PYTHONPATH uv run --no-sync .venv/bin/python scripts/B5_repo_ops_agent.py --interactive
 """
 import argparse
@@ -50,7 +52,7 @@ DB_PATH = REPO_ROOT / "workspace" / "b5_checkpoints.db"
 
 
 class LocalObservabilityHandler(BaseCallbackHandler):
-    """Log tool calls (tên, args, thời gian) và token usage — giống B4."""
+    """Log tool calls (name, args, elapsed time) and token usage — same as B4."""
 
     def __init__(self) -> None:
         self._tool_started_at: dict[UUID, float] = {}
@@ -82,7 +84,7 @@ def resolve_decisions(action_requests: list[dict], interactive: bool) -> list[di
             print(f"  [auto-approve demo] {name}({args})")
             decisions.append({"type": "approve"})
             continue
-        print(f"\n  Tool cần duyệt: {name}({args})")
+        print(f"\n  Tool needs approval: {name}({args})")
         choice = input("  approve / reject? [a/r]: ").strip().lower()
         decisions.append({"type": "approve" if choice == "a" else "reject"})
     return decisions
@@ -113,8 +115,8 @@ REPO_OPS_SYSTEM_PROMPT = (
 def build_repo_ops_agent(model: str, root_dir: Path, checkpointer):
     """Build the repo-ops agent. Shared with `evals/test_repo_ops_eval.py`.
 
-    Filesystem + shell THẬT, giới hạn root_dir. `execute()` chạy với
-    cwd = root_dir (xem docstring `LocalShellBackend.execute`).
+    Real filesystem + real shell, confined to root_dir. `execute()` runs with
+    cwd = root_dir (see the `LocalShellBackend.execute` docstring).
     """
     backend = LocalShellBackend(root_dir=root_dir, virtual_mode=True)
     return create_deep_agent(
@@ -148,7 +150,7 @@ def run_to_completion(agent, config: dict, user_msg: str, *, interactive: bool =
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--interactive", action="store_true", help="Duyệt thủ công qua stdin")
+    parser.add_argument("--interactive", action="store_true", help="Approve manually via stdin")
     args = parser.parse_args()
 
     DB_PATH.parent.mkdir(exist_ok=True)

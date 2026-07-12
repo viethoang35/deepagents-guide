@@ -1,71 +1,72 @@
 # CHECKLOG
 
-Tổng hợp các thay đổi đã thực hiện trong dự án `deepagents-guide`, theo thời gian.
-Mục tiêu: giúp bất kỳ ai (kể cả future-you) nắm được repo đã đi từ đâu tới đâu mà
-không phải đọc lại toàn bộ lịch sử chat.
+A running log of changes made to the `deepagents-guide` project, in chronological order.
+Goal: let anyone (including future-you) understand where the repo has been without having
+to re-read the entire chat history.
 
 ## 2026-07-12
 
-### Thêm mới — scripts (agent)
+### Added — scripts (agent)
 
-- **`scripts/B4_hardened_agent.py`** — 3 lớp hardening cho harness:
-  - Checkpointer bền (`SqliteSaver` → `workspace/b4_checkpoints.db`), resume đúng
-    thread sau khi tắt/mở lại process.
-  - Human-in-the-loop (`interrupt_on`) cho tool có side effect (`send_email`,
-    `delete_file`); tool an toàn (`get_weather`) chạy thẳng không cần duyệt.
-  - Observability nhẹ: callback handler cục bộ log tool call + token usage,
-    không cần LangSmith.
-  - Đã verify: chạy thật (auto-approve + interactive), xác nhận resume qua
-    `thread_id` cũ đọc đúng lịch sử, và reject thực sự chặn hành động.
+- **`scripts/B4_hardened_agent.py`** — 3 hardening layers for the harness:
+  - Durable checkpointer (`SqliteSaver` → `workspace/b4_checkpoints.db`), correctly resumes
+    a thread after the process is stopped and restarted.
+  - Human-in-the-loop (`interrupt_on`) for tools with side effects (`send_email`,
+    `delete_file`); safe tools (`get_weather`) run straight through without approval.
+  - Lightweight observability: a local callback handler logs tool calls + token usage,
+    no LangSmith account needed.
+  - Verified live: ran both auto-approve and interactive modes, confirmed resuming an old
+    `thread_id` reads back the correct history, and that rejecting an action actually blocks it.
 
-- **`scripts/B5_repo_ops_agent.py`** — Repo-ops agent trên hardened base:
-  - Dùng `LocalShellBackend` (filesystem + shell THẬT, giới hạn
-    `workspace/sample-repo/` qua `virtual_mode=True`).
-  - Sub-agent `runner-agent` chạy `pytest` thật; orchestrator tự đọc/sửa file khi
-    test fail rồi chạy lại để xác nhận.
-  - Refactor thành `build_repo_ops_agent()` + `run_to_completion()` để dùng lại
-    trong `evals/test_repo_ops_eval.py` (không copy-paste logic).
-  - Đã verify: chạy thật với model mặc định, agent tự phục hồi khi `python` không
-    có trên PATH, cài `pytest` qua `ensurepip`, chẩn đoán đúng bug, sửa, và xác
-    nhận test pass. Test cả nhánh reject qua `--interactive`.
-  - ⚠️ Ghi chú an toàn: `LocalShellBackend` không sandbox — `execute` không bị
-    giới hạn bởi `virtual_mode`. Lớp an toàn duy nhất là HITL.
+- **`scripts/B5_repo_ops_agent.py`** — Repo-ops agent on the hardened base:
+  - Uses `LocalShellBackend` (real filesystem + real shell, confined to
+    `workspace/sample-repo/` via `virtual_mode=True`).
+  - `runner-agent` sub-agent runs real `pytest`; the orchestrator reads/fixes the file
+    itself when a test fails, then reruns to confirm.
+  - Refactored into `build_repo_ops_agent()` + `run_to_completion()` so
+    `evals/test_repo_ops_eval.py` can reuse them instead of duplicating the logic.
+  - Verified live: ran with the default model, watched the agent self-recover when `python`
+    wasn't on PATH, install `pytest` via `ensurepip`, correctly diagnose and fix the bug, and
+    confirm the test passes. Also tested the reject path via `--interactive`.
+  - ⚠️ Safety note: `LocalShellBackend` has no sandbox — `execute` is not constrained by
+    `virtual_mode`. The only safety layer is HITL.
 
-- **`scripts/B6_cross_thread_memory.py`** — Cross-thread memory (`memory=[...]`),
-  phân biệt với checkpointer (B4):
-  - Checkpointer nhớ *trong 1 thread*; `memory=[...]` nhớ *xuyên thread* qua 1 file
-    `AGENTS.md` thật trên đĩa (`workspace/agent_memory/AGENTS.md`).
-  - Đã verify: thread A dạy agent 1 sở thích, thread B (thread_id mới, không liên
-    quan) vẫn áp dụng đúng sở thích đó.
+- **`scripts/B6_cross_thread_memory.py`** — Cross-thread memory (`memory=[...]`), distinct
+  from the checkpointer (B4):
+  - The checkpointer remembers *within one thread*; `memory=[...]` remembers *across
+    threads* via a real `AGENTS.md` file on disk (`workspace/agent_memory/AGENTS.md`).
+  - Verified live: thread A teaches the agent a preference, thread B (a new, unrelated
+    `thread_id`) correctly applies that preference.
 
-### Thêm mới — eval
+### Added — eval
 
-- **`evals/test_repo_ops_eval.py`** — pytest thường (không cần LangSmith, khác bộ
-  eval đầy đủ ở `vendor-deepagents/libs/evals`), copy `sample-repo` vào thư mục tmp
-  riêng, chạy agent B5 với model được parametrize, assert `pytest` thật pass sau đó.
-  - Đã verify với 2 model mặc định: **`gpt-4o-mini` pass, `deepseek-chat-v3`
-    fail** — phát hiện thật, không phải giả định, đúng mục đích của eval này.
+- **`evals/test_repo_ops_eval.py`** — a plain pytest file (no LangSmith needed, unlike the
+  full eval suite in `vendor-deepagents/libs/evals`), copies `sample-repo` into its own tmp
+  directory, runs the B5 agent with a parametrized model, asserts real `pytest` passes afterward.
+  - Verified with the 2 default models: **`gpt-4o-mini` passed, `deepseek-chat-v3` failed** —
+    a real, observed finding, not a hypothetical one — exactly the point of this eval.
 
-### Thêm mới — dữ liệu demo
+### Added — demo data
 
-- `workspace/sample-repo/{calc.py,test_calc.py}` — bug cố ý (`average()` trừ dư 1)
-  để B5/eval có cái thật để chẩn đoán. Giữ nguyên ở trạng thái "có bug" sau mỗi lần
-  demo để lần chạy tiếp theo còn ý nghĩa.
-- `workspace/agent_memory/AGENTS.md` — sinh ra từ lần chạy demo B6 (memory thật).
+- `workspace/sample-repo/{calc.py,test_calc.py}` — an intentional bug (`average()` subtracts
+  an extra 1) so B5/the eval have something real to diagnose. Left in its "buggy" state after
+  each demo so the next run still has something meaningful to fix.
+- `workspace/agent_memory/AGENTS.md` — generated by a live B6 demo run (real memory content).
 
-### Cập nhật
+### Updated
 
-- `pyproject.toml`: thêm `langgraph-checkpoint-sqlite` (checkpointer bền cho B4/B5)
-  và `pytest` (chạy `evals/`).
-- `.env.example`: thêm biến LangSmith tuỳ chọn (`LANGSMITH_TRACING`,
+- `pyproject.toml`: added `langgraph-checkpoint-sqlite` (durable checkpointer for B4/B5) and
+  `pytest` (to run `evals/`).
+- `.env.example`: added optional LangSmith variables (`LANGSMITH_TRACING`,
   `LANGSMITH_API_KEY`, `LANGSMITH_PROJECT`).
-- `README.md`: thêm Bước 4–8 (hardened harness, repo-ops agent, cross-thread
-  memory, LangSmith tracing, eval script), cập nhật cây cấu trúc thư mục.
+- `README.md`: added Steps 4–8 (hardened harness, repo-ops agent, cross-thread memory,
+  LangSmith tracing, eval script), updated the directory structure tree.
+- All Vietnamese comments/docstrings/prose across the repo (README, this file, `.env.example`,
+  every script, the eval) translated to English so the project is readable by a wider audience.
 
-### Chưa verify / giới hạn đã biết
+### Not yet verified / known limitations
 
-- LangSmith tracing: xác nhận đúng cơ chế (biến env chuẩn của LangChain, không
-  cần sửa code), **chưa** test end-to-end với key thật vì máy này chưa có key.
-- `LocalShellBackend` trong B5 không có sandbox thật — muốn cách ly cứng
-  (Docker/VM) cần extend `BaseSandbox` (xem `vendor-deepagents/libs/partners/`:
-  modal, runloop, daytona).
+- LangSmith tracing: confirmed *mechanically correct* (a standard LangChain env var, no code
+  required), but **not** tested end-to-end with a real key since this machine doesn't have one.
+- `LocalShellBackend` in B5 has no real sandbox — real isolation (Docker/VM) requires
+  extending `BaseSandbox` (see `vendor-deepagents/libs/partners/`: modal, runloop, daytona).

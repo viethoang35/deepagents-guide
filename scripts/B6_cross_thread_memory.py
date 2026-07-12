@@ -1,28 +1,30 @@
 """
-B6_cross_thread_memory.py — Cross-thread memory (Bước 6), khác với checkpointer.
+B6_cross_thread_memory.py — Cross-thread memory (Step 6), different from the checkpointer.
 
-Phân biệt 2 loại "nhớ" hay bị nhầm với nhau:
-  - Checkpointer (B4): nhớ trong CÙNG 1 thread — lịch sử message của 1
-    conversation, resume qua thread_id.
-  - `memory=[...]` (bài này): nhớ XUYÊN thread — 1 file AGENTS.md THẬT trên
-    đĩa, được nạp vào system prompt ở đầu MỌI conversation (mọi thread_id),
-    và agent có thể tự cập nhật file này qua edit_file khi học được điều gì
-    mới. Đây là cơ chế "long-term memory" của Deep Agents.
+Distinguishes 2 kinds of "memory" that are easy to confuse:
+  - Checkpointer (B4): remembers within the SAME thread — the message
+    history of 1 conversation, resumed via thread_id.
+  - `memory=[...]` (this one): remembers ACROSS threads — a REAL AGENTS.md
+    file on disk, loaded into the system prompt at the start of EVERY
+    conversation (every thread_id), which the agent can update itself via
+    edit_file when it learns something new. This is Deep Agents' "long-term
+    memory" mechanism.
 
-Demo: chạy 2 "conversation" hoàn toàn tách biệt (2 thread_id khác nhau, coi
-như 2 lần mở app ở 2 ngày khác nhau):
-  1. Conversation A: user báo 1 sở thích (trả lời dạng bullet point). Agent
-     ghi sở thích này vào workspace/agent_memory/AGENTS.md qua edit_file
-     (cần duyệt — vẫn dùng HITL như B4/B5).
-  2. Conversation B: thread_id MỚI, không liên quan gì tới A. User hỏi 1 câu
-     khác. Agent vẫn trả lời theo đúng sở thích đã lưu ở bước 1 — chứng minh
-     memory này sống ngoài phạm vi 1 thread.
+Demo: runs 2 completely separate "conversations" (2 different thread_ids, as
+if opening the app on 2 different days):
+  1. Conversation A: the user states a preference (answer in bullet points).
+     The agent writes this preference to workspace/agent_memory/AGENTS.md
+     via edit_file (needs approval — still using HITL like B4/B5).
+  2. Conversation B: a NEW thread_id, unrelated to A. The user asks a
+     different question. The agent still answers according to the
+     preference saved in step 1 — proving this memory lives outside the
+     scope of a single thread.
 
-Chạy:
+Run:
   env -u PYTHONPATH uv run --no-sync .venv/bin/python scripts/B6_cross_thread_memory.py
 
-Chạy lại (không xoá AGENTS.md): script sẽ append thêm — xoá
-workspace/agent_memory/AGENTS.md nếu muốn xem lại từ đầu.
+Running it again (without deleting AGENTS.md): the script will append more —
+delete workspace/agent_memory/AGENTS.md if you want to see it from scratch.
 """
 import os
 import uuid
@@ -38,7 +40,7 @@ load_dotenv()
 
 MODEL = os.getenv("DEEPAGENTS_MODEL", "openrouter:openai/gpt-4o-mini")
 MEMORY_DIR = __import__("pathlib").Path(__file__).parent.parent / "workspace" / "agent_memory"
-MEMORY_FILE = "/AGENTS.md"  # path ảo bên trong MEMORY_DIR (virtual_mode=True)
+MEMORY_FILE = "/AGENTS.md"  # virtual path inside MEMORY_DIR (virtual_mode=True)
 
 
 def run_turn(agent, user_msg: str, thread_id: str) -> str:
@@ -78,7 +80,7 @@ def main() -> None:
         interrupt_on={"write_file": True, "edit_file": True},
     )
 
-    print(">>> Conversation A (thread mới) — dạy agent 1 sở thích\n")
+    print(">>> Conversation A (new thread) — teaching the agent a preference\n")
     thread_a = str(uuid.uuid4())
     msg_a = (
         "From now on, always answer in bullet points, no paragraphs. "
@@ -88,7 +90,7 @@ def main() -> None:
     reply_a = run_turn(agent, msg_a, thread_a)
     print(f"  Agent: {reply_a}\n")
 
-    print(">>> Conversation B (thread MỚI, không liên quan tới A)\n")
+    print(">>> Conversation B (a NEW thread, unrelated to A)\n")
     thread_b = str(uuid.uuid4())
     msg_b = "What is a deep agent, in short?"
     print(f"  User: {msg_b}")
@@ -96,11 +98,11 @@ def main() -> None:
     print(f"  Agent: {reply_b}\n")
 
     real_path = MEMORY_DIR / MEMORY_FILE.lstrip("/")
-    print(f">>> Nội dung {MEMORY_FILE} hiện tại (file thật tại {real_path}):")
+    print(f">>> Current content of {MEMORY_FILE} (a real file at {real_path}):")
     print("  " + real_path.read_text().replace("\n", "\n  "))
     print(
-        "\n>>> Nếu conversation B trả lời theo dạng bullet point (không phải "
-        "đoạn văn) dù thread_id hoàn toàn mới -> memory đã hoạt động xuyên thread."
+        "\n>>> If conversation B answered in bullet points (not a paragraph) despite "
+        "using a brand-new thread_id -> memory worked across threads."
     )
 
 

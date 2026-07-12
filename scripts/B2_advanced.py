@@ -1,14 +1,14 @@
 """
-B2_advanced.py — Deep Agents nâng cao: filesystem, sub-agent, streaming.
+B2_advanced.py — Advanced Deep Agents: filesystem, sub-agent, streaming.
 
-Minh họa các tính năng cốt lõi của Deep Agents:
-  - Sub-agent (ủy quyền, context cô lập)
-  - Virtual filesystem (đọc/ghi file)
-  - Streaming (in từng bước)
+Demonstrates core Deep Agents features:
+  - Sub-agent (delegation, isolated context)
+  - Virtual filesystem (read/write files)
+  - Streaming (print each step)
 
-Chạy:  env -u PYTHONPATH uv run --no-sync .venv/bin/python scripts/B2_advanced.py
-(Model lấy từ DEEPAGENTS_MODEL trong .env — ví dụ openrouter:openai/gpt-4o-mini.
-Cả agent chính và sub-agent researcher đều dùng chung biến MODEL này.)
+Run:  env -u PYTHONPATH uv run --no-sync .venv/bin/python scripts/B2_advanced.py
+(Model comes from DEEPAGENTS_MODEL in .env — e.g. openrouter:openai/gpt-4o-mini.
+Both the main agent and the researcher sub-agent share this same MODEL variable.)
 """
 import os
 from dotenv import load_dotenv
@@ -25,9 +25,9 @@ def web_search(query: str) -> str:
 
 
 def main():
-    # Sub-agent: researcher chạy context cô lập, chỉ làm web research.
-    # Phiên bản deepagents hiện tại nhận subagents dưới dạng dict spec
-    # (giống ví dụ nvidia_deep_agent), KHÔNG phải object SubAgent(agent=...).
+    # Sub-agent: researcher runs in an isolated context, only does web research.
+    # The current deepagents version accepts subagents as a dict spec
+    # (like the nvidia_deep_agent example), NOT a SubAgent(agent=...) object.
     researcher_sub = {
         "name": "researcher-agent",
         "description": "Delegate web research to this agent for any topic.",
@@ -36,8 +36,8 @@ def main():
         "tools": [web_search],
     }
 
-    # Agent chính: orchestrator, có filesystem + ủy quyền cho researcher
-    # Lưu ý: API thực tế dùng 'subagents' (không gạch dưới)
+    # Main agent: orchestrator, has filesystem access + delegates to researcher
+    # Note: the real API uses 'subagents' (no underscore)
     agent = create_deep_agent(
         model=MODEL,
         tools=[],
@@ -46,16 +46,16 @@ def main():
             "You are a research assistant. Delegate web lookups to the "
             "researcher sub-agent, then write a short summary to a file."
         ),
-        # Deep Agents tự cấp filesystem ảo; bạn có thể cấu hình quyền rõ ràng:
-        # filesystem={"root": "./workspace", "writable_paths": ["./workspace/output"]}
+        # Deep Agents provides a virtual filesystem automatically; you can configure
+        # explicit permissions: filesystem={"root": "./workspace", "writable_paths": ["./workspace/output"]}
     )
 
     user_msg = "Research 'agent harness security' and save a 3-line summary."
     print(f">>> User: {user_msg}\n")
 
-    # Streaming: in từng chunk. Lưu ý: agent.stream() trả dict có key là tên
-    # middleware (vd 'model', 'TodoListMiddleware.after_model'), nội dung nằm
-    # trong chunk[<key>]['messages'] (list). Ta duyệt mọi value để tìm message.
+    # Streaming: print each chunk. Note: agent.stream() returns a dict keyed by
+    # middleware name (e.g. 'model', 'TodoListMiddleware.after_model'), with the
+    # content living in chunk[<key>]['messages'] (a list). We scan every value to find messages.
     seen = set()
     for chunk in agent.stream(
         {"messages": [{"role": "user", "content": user_msg}]}
@@ -68,7 +68,7 @@ def main():
                     t = type(m).__name__
                     c = getattr(m, "content", "")
                     text = c if isinstance(c, str) else str(c)
-                    # chỉ in các đoạn có nội dung mới, tránh lặp
+                    # only print new content, avoid repeats
                     key = (t, text[:60])
                     if text.strip() and key not in seen:
                         seen.add(key)

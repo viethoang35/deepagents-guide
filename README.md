@@ -1,169 +1,174 @@
 # Deep Agents Hands-on Guide
 
-Dự án mẫu thực hành LangChain Deep Agents (verify trên macOS aarch64, Python 3.12, uv 0.11).
+A hands-on sample project for practicing LangChain Deep Agents (verified on macOS aarch64, Python 3.12, uv 0.11).
 
-## Cấu trúc
+## Structure
 ```
 deepagents-guide/
 ├── pyproject.toml          # deps: deepagents, langchain, langgraph, provider packages
-├── .env.example            # copy thành .env, điền 1 model key
+├── .env.example            # copy to .env, fill in one model key
 ├── scripts/
-│   ├── B2_quickstart.py    # agent đơn + 1 tool tự viết (verify chạy tới API call)
+│   ├── B2_quickstart.py    # single agent + 1 custom tool (verified through a real API call)
 │   ├── B2_advanced.py      # sub-agent (dict spec) + filesystem + streaming
 │   ├── B3_nemotron_deep_agent.py  # multi-model: orchestrator + researcher sub-agent (OpenRouter)
-│   ├── B4_hardened_agent.py       # checkpointer bền + human-in-the-loop + observability nhẹ
-│   ├── B5_repo_ops_agent.py       # agent đọc/sửa file THẬT + sub-agent chạy pytest THẬT (trên hardened base)
-│   └── B6_cross_thread_memory.py  # memory=[...]: nhớ XUYÊN thread (khác checkpointer B4 chỉ nhớ trong 1 thread)
+│   ├── B4_hardened_agent.py       # durable checkpointer + human-in-the-loop + lightweight observability
+│   ├── B5_repo_ops_agent.py       # agent reads/edits REAL files + sub-agent runs REAL pytest (on the hardened base)
+│   └── B6_cross_thread_memory.py  # memory=[...]: remembers ACROSS threads (unlike B4's checkpointer, which only remembers within 1 thread)
 ├── evals/
-│   └── test_repo_ops_eval.py      # pytest: agent B5 còn fix đúng bug không khi đổi model
-├── vendor-deepagents/      # clone langchain-ai/deepagents (ví dụ nvidia_deep_agent)
-└── vendor-nemoclaw/        # clone NVIDIA/nemoclaw-community (secure blueprint)
+│   └── test_repo_ops_eval.py      # pytest: does the B5 agent still fix the bug correctly when you swap models?
+├── vendor-deepagents/      # clone of langchain-ai/deepagents (e.g. nvidia_deep_agent example)
+└── vendor-nemoclaw/        # clone of NVIDIA/nemoclaw-community (secure blueprint)
 ```
 
-`vendor-deepagents/` và `vendor-nemoclaw/` **không** được commit vào repo này (xem
-`.gitignore`) — chúng là clone của repo người khác, tự clone lại khi cần:
+`vendor-deepagents/` and `vendor-nemoclaw/` are **not** committed to this repo (see
+`.gitignore`) — they're clones of other people's repos, re-clone them when needed:
 ```bash
 git clone https://github.com/langchain-ai/deepagents.git vendor-deepagents
 git clone https://github.com/NVIDIA/nemoclaw-community.git vendor-nemoclaw
 ```
 
-## Chạy nhanh (B1 + B2)
+## Quickstart (B1 + B2)
 ```bash
-uv sync                                   # B1: cài deps (đã sync sẵn trên máy này)
-cp .env.example .env                      # tạo file env
-# MỞ .env, điền: OPENROUTER_API_KEY=sk-or-... (bắt buộc để chạy B2/B3)
-# LƯU Ý: nếu shell có PYTHONPATH trỏ venv khác (như môi trường Hermes), dùng env -u PYTHONPATH
+uv sync                                   # B1: install deps (already synced on this machine)
+cp .env.example .env                      # create the env file
+# OPEN .env and fill in: OPENROUTER_API_KEY=sk-or-... (required to run B2/B3)
+# NOTE: if your shell has PYTHONPATH pointing at another venv (e.g. a "Hermes" environment), use env -u PYTHONPATH
 env -u PYTHONPATH uv run --no-sync .venv/bin/python scripts/B2_quickstart.py
 ```
 
-## Model qua OpenRouter (1 key, nhiều model)
-Deep Agents hỗ trợ prefix `openrouter:`. Định dạng: `openrouter:<provider>/<model>`.
-Ví dụ trong `.env`:
+## Models via OpenRouter (1 key, many models)
+Deep Agents supports the `openrouter:` prefix. Format: `openrouter:<provider>/<model>`.
+Example in `.env`:
 ```
 OPENROUTER_API_KEY=sk-or-...
 DEEPAGENTS_MODEL=openrouter:deepseek/deepseek-chat-v3
-# hoặc: openrouter:x-ai/grok-4.5
-# hoặc: openrouter:openai/gpt-4o-mini
+# or: openrouter:x-ai/grok-4.5
+# or: openrouter:openai/gpt-4o-mini
 ```
-Đăng ký key: https://openrouter.ai/keys
+Register a key at: https://openrouter.ai/keys
 
-## Bước 3 — Multi-model Deep Agent (Nemotron style, qua OpenRouter)
-Rút gọn từ ví dụ `vendor-deepagents/examples/nvidia_deep_agent`, nhưng gọi cả 2 model qua
-OpenRouter (1 key). Orchestrator = model mạnh (grok-4.5), researcher sub-agent = model rẻ/nhanh (deepseek).
+## Step 3 — Multi-model Deep Agent (Nemotron style, via OpenRouter)
+A trimmed-down version of the official `vendor-deepagents/examples/nvidia_deep_agent` example, but
+calling both models through OpenRouter (1 key). Orchestrator = strong model (grok-4.5), researcher
+sub-agent = cheap/fast model (deepseek).
 ```bash
-# .env: ORCHESTRATOR_MODEL + RESEARCHER_MODEL (đã có sẵn trong .env.example)
+# .env: ORCHESTRATOR_MODEL + RESEARCHER_MODEL (already present in .env.example)
 env -u PYTHONPATH uv run --no-sync .venv/bin/python scripts/B3_nemotron_deep_agent.py
 ```
-Biến `.env` cho B3:
+`.env` variables for B3:
 ```
 ORCHESTRATOR_MODEL=openrouter:x-ai/grok-4.5
 RESEARCHER_MODEL=openrouter:deepseek/deepseek-chat-v3
 ```
 
-## Bước 4 — Harden the harness (checkpointer + human-in-the-loop + observability)
-`B4_hardened_agent.py` lấy lại orchestrator đơn giản nhưng thêm 3 thứ cần cho môi trường thật:
-- **Checkpointer bền** (`SqliteSaver`): state lưu vào `workspace/b4_checkpoints.db`, resume lại đúng
-  thread sau khi tắt/mở lại process.
-- **Human-in-the-loop** (`interrupt_on`): tool có side effect thật (`send_email`, `delete_file`) bị
-  dừng lại chờ người duyệt (`approve`/`reject`) trước khi chạy; tool an toàn (`get_weather`) chạy thẳng.
-- **Observability nhẹ**: callback handler cục bộ log tool call + token usage, không cần LangSmith.
-  Nếu có LangSmith, chỉ cần set `LANGSMITH_TRACING=true` + `LANGSMITH_API_KEY` trong `.env`, không sửa code.
+## Step 4 — Harden the harness (checkpointer + human-in-the-loop + observability)
+`B4_hardened_agent.py` reuses the simple orchestrator but adds 3 things a real environment needs:
+- **Durable checkpointer** (`SqliteSaver`): state is saved to `workspace/b4_checkpoints.db`, so the
+  agent resumes the correct thread after the process is stopped and restarted.
+- **Human-in-the-loop** (`interrupt_on`): tools with real side effects (`send_email`, `delete_file`)
+  pause for a human decision (`approve`/`reject`) before running; safe tools (`get_weather`) run straight through.
+- **Lightweight observability**: a local callback handler logs tool calls + token usage, no LangSmith
+  account needed. If you do have LangSmith, just set `LANGSMITH_TRACING=true` + `LANGSMITH_API_KEY`
+  in `.env` — no code changes.
 
 ```bash
-# Demo tự động duyệt (không cần nhập tay):
+# Auto-approve demo (no manual input needed):
 env -u PYTHONPATH uv run --no-sync .venv/bin/python scripts/B4_hardened_agent.py
 
-# Duyệt thủ công từng tool nhạy cảm (approve/reject qua stdin):
+# Manually approve each sensitive tool call (approve/reject via stdin):
 env -u PYTHONPATH uv run --no-sync .venv/bin/python scripts/B4_hardened_agent.py --interactive
 
-# Resume 1 thread cũ (thread_id được in ra ở lần chạy trước):
+# Resume an old thread (thread_id printed on a previous run):
 env -u PYTHONPATH uv run --no-sync .venv/bin/python scripts/B4_hardened_agent.py --thread-id <id>
 ```
 
-## Bước 5 — Repo-ops agent (filesystem + shell THẬT, trên hardened base)
-`B5_repo_ops_agent.py` dùng `LocalShellBackend` (filesystem + shell thật trên máy bạn,
-giới hạn trong `workspace/sample-repo/` qua `virtual_mode=True` + `root_dir`) thay cho
-virtual filesystem giả lập của B2. Orchestrator ủy quyền cho sub-agent `runner-agent`
-chạy `pytest` thật; nếu test fail, orchestrator tự đọc file, sửa lỗi bằng `edit_file`,
-rồi chạy lại test để xác nhận. Mọi `write_file`/`edit_file`/`execute` đều bị chặn chờ
-duyệt (tái dùng đúng cơ chế HITL từ Bước 4).
+## Step 5 — Repo-ops agent (real filesystem + real shell, on the hardened base)
+`B5_repo_ops_agent.py` uses `LocalShellBackend` (real filesystem + real shell on your machine,
+confined to `workspace/sample-repo/` via `virtual_mode=True` + `root_dir`) instead of B2's simulated
+virtual filesystem. The orchestrator delegates to a `runner-agent` sub-agent that runs real `pytest`;
+if a test fails, the orchestrator reads the file itself, fixes the bug with `edit_file`, then reruns
+the tests to confirm. Every `write_file`/`edit_file`/`execute` call is blocked pending approval
+(reusing the exact HITL mechanism from Step 4).
 
-`workspace/sample-repo/` chứa 1 bug cố ý (`calc.py` trừ dư `1` trong `average()`) để
-agent có cái thật để chẩn đoán — nếu bạn thấy nó đã "sạch" (không còn bug) là vì lần
-chạy trước agent đã fix xong, sửa lại file để demo lại từ đầu.
+`workspace/sample-repo/` contains 1 intentional bug (`calc.py` subtracts an extra `1` in
+`average()`) so the agent has something real to diagnose — if you find it already "clean" (no bug),
+that's because a previous run's agent already fixed it; the file gets reset so the demo means
+something again.
 
-⚠️ `LocalShellBackend` **không sandbox** — `execute` chạy lệnh shell thật với quyền
-của bạn, không bị giới hạn bởi `virtual_mode` (chỉ các tool filesystem mới bị giới
-hạn). An toàn duy nhất ở đây là lớp HITL. Muốn cách ly thật (Docker/VM), xem
-`vendor-deepagents/libs/partners/` (modal, runloop, daytona) và extend `BaseSandbox`.
+⚠️ `LocalShellBackend` has **no sandbox** — `execute` runs real shell commands with your
+permissions and is NOT constrained by `virtual_mode` (only the filesystem tools are constrained).
+The only safety layer here is HITL. For real isolation (Docker/VM), see
+`vendor-deepagents/libs/partners/` (modal, runloop, daytona) and extend `BaseSandbox`.
 
 ```bash
-# Demo tự động duyệt:
+# Auto-approve demo:
 env -u PYTHONPATH uv run --no-sync .venv/bin/python scripts/B5_repo_ops_agent.py
 
-# Duyệt thủ công từng write_file/edit_file/execute:
+# Manually approve each write_file/edit_file/execute call:
 env -u PYTHONPATH uv run --no-sync .venv/bin/python scripts/B5_repo_ops_agent.py --interactive
 ```
 
-## Bước 6 — Cross-thread memory (khác checkpointer)
-`B6_cross_thread_memory.py` minh họa `memory=[...]`, dễ nhầm với checkpointer (B4)
-nhưng là 2 cơ chế khác nhau:
-- **Checkpointer** (B4): nhớ *trong cùng 1 thread* — lịch sử message, resume qua `thread_id`.
-- **`memory=[...]`** (bài này): nhớ *xuyên thread* — 1 file `AGENTS.md` THẬT trên đĩa
-  (`workspace/agent_memory/AGENTS.md`), nạp vào system prompt ở đầu MỌI conversation,
-  agent tự cập nhật qua `edit_file` khi học được điều gì mới (qua HITL duyệt).
+## Step 6 — Cross-thread memory (different from the checkpointer)
+`B6_cross_thread_memory.py` demonstrates `memory=[...]`, easily confused with the checkpointer (B4)
+but a different mechanism:
+- **Checkpointer** (B4): remembers *within the same thread* — message history, resumed via `thread_id`.
+- **`memory=[...]`** (this one): remembers *across threads* — a REAL `AGENTS.md` file on disk
+  (`workspace/agent_memory/AGENTS.md`), loaded into the system prompt at the start of EVERY
+  conversation, which the agent updates itself via `edit_file` when it learns something new (gated
+  by HITL approval).
 
-Script chạy 2 "conversation" với `thread_id` hoàn toàn khác nhau: conversation A dạy
-agent 1 sở thích (trả lời dạng bullet point), conversation B (thread mới, không liên
-quan) vẫn trả lời đúng theo sở thích đó — chứng minh memory sống ngoài phạm vi 1 thread.
+The script runs 2 "conversations" with completely different `thread_id`s: conversation A teaches
+the agent a preference (answer in bullet points), conversation B (a new, unrelated thread) still
+answers according to that preference — proving the memory lives outside the scope of a single thread.
 
 ```bash
 env -u PYTHONPATH uv run --no-sync .venv/bin/python scripts/B6_cross_thread_memory.py
 ```
 
-## Bước 7 (tuỳ chọn) — LangSmith tracing
-Áp dụng cho **mọi** script ở trên, không cần sửa 1 dòng code nào — LangChain tự đọc
-biến env này. Set trong `.env` (xem `.env.example`):
+## Step 7 (optional) — LangSmith tracing
+Applies to **every** script above with zero code changes — LangChain reads this env var
+automatically. Set it in `.env` (see `.env.example`):
 ```
 LANGSMITH_TRACING=true
 LANGSMITH_API_KEY=lsv2_...
 LANGSMITH_PROJECT=deepagents-guide
 ```
-Sau đó chạy bất kỳ script nào (B2-B5) như bình thường — trajectory đầy đủ (tool call,
-sub-agent delegation, token usage per step) sẽ xuất hiện trên smith.langchain.com theo
-project name, dễ debug hơn nhiều so với đọc log console. Hữu ích nhất cho B3/B5 vì có
-nhiều bước orchestrator ↔ sub-agent khó theo dõi qua print.
+Then run any script (B2-B5) as usual — the full trajectory (tool calls, sub-agent delegation,
+per-step token usage) will show up on smith.langchain.com under that project name, which is much
+easier to debug than reading console logs. Most useful for B3/B5 since they have several
+orchestrator ↔ sub-agent steps that are hard to follow via print statements.
 
-Lưu ý: mục này mới verify được là *đúng cơ chế* (biến env chuẩn của LangChain, không
-cần code) — chưa test end-to-end với key LangSmith thật vì máy này chưa có key đó.
+Note: this has only been verified as *mechanically correct* (a standard LangChain env var, no code
+required) — it hasn't been tested end-to-end with a real LangSmith key since this machine doesn't have one.
 
-## Bước 8 — Eval: agent B5 có còn fix đúng bug khi đổi model không?
-`evals/test_repo_ops_eval.py` là 1 pytest thường (không cần LangSmith, khác bộ eval
-đầy đủ ở `vendor-deepagents/libs/evals` vốn *bắt buộc* LangSmith tracing). Mỗi test
-case: copy `workspace/sample-repo/` (bug cố ý) vào 1 thư mục tmp riêng, chạy agent B5
-(tái dùng `build_repo_ops_agent`/`run_to_completion`, auto-approve), rồi chạy `pytest`
-thật trong thư mục tmp và assert nó pass.
+## Step 8 — Eval: does the B5 agent still fix the bug correctly after swapping models?
+`evals/test_repo_ops_eval.py` is a plain pytest file (no LangSmith required, unlike the full eval
+suite in `vendor-deepagents/libs/evals`, which *requires* LangSmith tracing). Each test case: copies
+`workspace/sample-repo/` (intentional bug) into its own tmp directory, runs the B5 agent (reusing
+`build_repo_ops_agent`/`run_to_completion`, auto-approve), then runs real `pytest` in that tmp
+directory and asserts it passes.
 
 ```bash
 env -u PYTHONPATH uv run --no-sync .venv/bin/python -m pytest evals/ -v
 
-# Đổi danh sách model muốn eval:
+# Change which models get evaluated:
 EVAL_MODELS="openrouter:openai/gpt-4o-mini,openrouter:x-ai/grok-4.5" \
   env -u PYTHONPATH uv run --no-sync .venv/bin/python -m pytest evals/ -v
 ```
 
-Đã verify thật: chạy với 2 model mặc định (`gpt-4o-mini` và `deepseek-chat-v3`) thì
-**`gpt-4o-mini` pass nhưng `deepseek-chat-v3` fail** — agent dùng deepseek không sửa
-xong bug trong lần chạy đó. Đây chính xác là giá trị của eval này: bạn biết ngay khi
-đổi model mà không cần tự chạy tay B5 và đọc log từng bước.
+Actually verified: running with the 2 default models (`gpt-4o-mini` and `deepseek-chat-v3`) —
+**`gpt-4o-mini` passed but `deepseek-chat-v3` failed** — the deepseek-driven agent didn't finish
+fixing the bug in that run. This is exactly the value of this eval: you find out immediately when
+swapping models breaks something, instead of manually running B5 and reading the log step by step.
 
-## Lỗi thường gặp & fix
-- `No module named 'pydantic_core._pydantic_core'`: do PYTHONPATH kế thừa từ venv khác.
-  Fix: chạy với `env -u PYTHONPATH` hoặc unset PYTHONPATH trước.
-- `ModuleNotFoundError: langchain_openai`: chưa cài provider package → đã thêm vào pyproject.
-- `TypeError: ... unexpected keyword argument 'sub_agents'`: API thật dùng `subagents` (không gạch dưới).
-- `KeyError: 'system_prompt'` khi truyền sub-agent: dùng **dict spec** `{"name":..., "system_prompt":..., "model":..., "tools":[...]}` (không dùng object SubAgent(agent=...)).
+## Common errors & fixes
+- `No module named 'pydantic_core._pydantic_core'`: caused by an inherited PYTHONPATH from another venv.
+  Fix: run with `env -u PYTHONPATH` or unset PYTHONPATH first.
+- `ModuleNotFoundError: langchain_openai`: the provider package wasn't installed → already added to pyproject.
+- `TypeError: ... unexpected keyword argument 'sub_agents'`: the real API uses `subagents` (no underscore).
+- `KeyError: 'system_prompt'` when passing a sub-agent: use a **dict spec**
+  `{"name":..., "system_prompt":..., "model":..., "tools":[...]}` (not a `SubAgent(agent=...)` object).
 
-## Ví dụ nâng cao (từ vendor)
+## Advanced examples (from vendor)
 - Multi-model + GPU skills: `vendor-deepagents/examples/nvidia_deep_agent/`
 - Secure blueprint (Deep Agents + OpenShell): `vendor-nemoclaw/examples/harness-engineering-playground/`

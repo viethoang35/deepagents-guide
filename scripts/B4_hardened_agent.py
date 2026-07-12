@@ -1,29 +1,29 @@
 """
-B4_hardened_agent.py — Deep Agents "production-safer" harness (Bước 4).
+B4_hardened_agent.py — A "production-safer" Deep Agents harness (Step 4).
 
-Lấy lại orchestrator đơn giản (giống B2) nhưng thêm 3 lớp thường bị bỏ qua
-khi mới học Deep Agents:
+Reuses the simple orchestrator (like B2) but adds 3 layers that are commonly
+skipped when first learning Deep Agents:
 
-  1. Checkpointer bền (SqliteSaver): state của conversation được lưu vào file
-     .db, agent có thể dừng giữa chừng và resume lại đúng thread sau khi
-     process khác được khởi động lại (không mất context).
-  2. Human-in-the-loop (interrupt_on): các tool "nguy hiểm" (send_email,
-     delete_file) bị chặn lại để chờ người duyệt trước khi thực thi thật,
-     thay vì để model tự do gọi.
-  3. Observability nhẹ (callback handler cục bộ): log mọi tool call (tên,
-     args, thời gian chạy) + token usage mỗi lần gọi model — không cần tài
-     khoản ngoài. Nếu bạn có LangSmith, set 2 biến env dưới là đủ, không cần
-     sửa code:
+  1. Durable checkpointer (SqliteSaver): conversation state is saved to a
+     .db file, so the agent can stop mid-task and resume the correct thread
+     after the process is restarted (no lost context).
+  2. Human-in-the-loop (interrupt_on): "dangerous" tools (send_email,
+     delete_file) pause for a human decision before actually running,
+     instead of letting the model call them freely.
+  3. Lightweight observability (a local callback handler): logs every tool
+     call (name, args, elapsed time) + token usage on every model call — no
+     external account needed. If you do have LangSmith, just set these 2 env
+     vars, no code changes:
        LANGSMITH_TRACING=true
        LANGSMITH_API_KEY=ls__...
 
-Chạy (demo tự động duyệt, không cần nhập tay):
+Run (auto-approve demo, no manual input needed):
   env -u PYTHONPATH uv run --no-sync .venv/bin/python scripts/B4_hardened_agent.py
 
-Chạy có duyệt thủ công (approve/reject từng bước qua stdin):
+Run with manual approval (approve/reject each step via stdin):
   env -u PYTHONPATH uv run --no-sync .venv/bin/python scripts/B4_hardened_agent.py --interactive
 
-Resume 1 thread cũ (dùng lại thread_id đã in ra lần trước):
+Resume an old thread (reuse the thread_id printed on a previous run):
   env -u PYTHONPATH uv run --no-sync .venv/bin/python scripts/B4_hardened_agent.py --thread-id <id>
 """
 import argparse
@@ -48,8 +48,8 @@ DB_PATH = Path(__file__).parent.parent / "workspace" / "b4_checkpoints.db"
 
 
 # --- Tools -----------------------------------------------------------------
-# send_email và delete_file là tool "nhạy cảm": có tác dụng phụ thật (side
-# effect) nếu chạy production, nên được đưa vào interrupt_on ở dưới.
+# send_email and delete_file are "sensitive" tools: they have real side
+# effects in production, so they're placed in interrupt_on below.
 
 def send_email(to: str, subject: str, body: str) -> str:
     """Send an email (mock)."""
@@ -62,14 +62,14 @@ def delete_file(path: str) -> str:
 
 
 def get_weather(city: str) -> str:
-    """Get the current weather for a given city (mock, an toàn — không cần duyệt)."""
+    """Get the current weather for a given city (mock, safe — no approval needed)."""
     return f"It's always sunny in {city}!"
 
 
-# --- Observability: callback handler cục bộ, không cần LangSmith -----------
+# --- Observability: local callback handler, no LangSmith needed ------------
 
 class LocalObservabilityHandler(BaseCallbackHandler):
-    """Log tool calls (tên, args, thời gian) và token usage mỗi lần gọi model."""
+    """Log tool calls (name, args, elapsed time) and token usage on every model call."""
 
     def __init__(self) -> None:
         self._tool_started_at: dict[UUID, float] = {}
@@ -105,7 +105,7 @@ class LocalObservabilityHandler(BaseCallbackHandler):
                     )
 
 
-# --- HITL: quyết định approve/reject cho từng action_request ---------------
+# --- HITL: decide approve/reject for each action_request -------------------
 
 def resolve_decisions(action_requests: list[dict], interactive: bool) -> list[dict]:
     decisions = []
@@ -116,7 +116,7 @@ def resolve_decisions(action_requests: list[dict], interactive: bool) -> list[di
             print(f"  [auto-approve demo] {name}({args})")
             decisions.append({"type": "approve"})
             continue
-        print(f"\n  Tool cần duyệt: {name}({args})")
+        print(f"\n  Tool needs approval: {name}({args})")
         choice = input("  approve / reject? [a/r]: ").strip().lower()
         decisions.append({"type": "approve" if choice == "a" else "reject"})
     return decisions
@@ -124,8 +124,8 @@ def resolve_decisions(action_requests: list[dict], interactive: bool) -> list[di
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--interactive", action="store_true", help="Duyệt thủ công qua stdin")
-    parser.add_argument("--thread-id", default=None, help="Resume 1 thread cũ (checkpoint đã lưu)")
+    parser.add_argument("--interactive", action="store_true", help="Approve manually via stdin")
+    parser.add_argument("--thread-id", default=None, help="Resume an old thread (saved checkpoint)")
     args = parser.parse_args()
 
     DB_PATH.parent.mkdir(exist_ok=True)
@@ -150,15 +150,15 @@ def main() -> None:
             "configurable": {"thread_id": thread_id},
             "callbacks": [LocalObservabilityHandler()],
         }
-        print(f">>> thread_id = {thread_id}  (lưu lại để --thread-id resume sau)")
+        print(f">>> thread_id = {thread_id}  (save this to resume later with --thread-id)")
         print(f">>> checkpoint db = {DB_PATH}")
 
         if args.thread_id:
-            # Resume thread cũ: không gửi message mới, chỉ tiếp tục state đã lưu.
+            # Resume an old thread: don't send a new message, just continue the saved state.
             state = agent.get_state(config)
-            print(f">>> Resumed. {len(state.values.get('messages', []))} message(s) trong lịch sử.")
+            print(f">>> Resumed. {len(state.values.get('messages', []))} message(s) in history.")
             if not state.interrupts:
-                print(">>> Thread này không có interrupt đang chờ — không có gì để resume.")
+                print(">>> This thread has no pending interrupt — nothing to resume.")
                 return
         else:
             user_msg = (
@@ -169,7 +169,7 @@ def main() -> None:
             print(f">>> User: {user_msg}\n")
             agent.invoke({"messages": [{"role": "user", "content": user_msg}]}, config=config)
 
-        # Vòng lặp: mỗi lần graph dừng lại vì interrupt, hỏi quyết định rồi resume.
+        # Loop: every time the graph pauses on an interrupt, ask for a decision then resume.
         state = agent.get_state(config)
         while state.interrupts:
             interrupt_value = state.interrupts[0].value

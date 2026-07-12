@@ -1,23 +1,24 @@
 """
-B3_nemotron_deep_agent.py — Multi-model Deep Agent qua OpenRouter (Bước 3).
+B3_nemotron_deep_agent.py — Multi-model Deep Agent via OpenRouter (Step 3).
 
-Rút gọn từ ví dụ chính thức langchain-ai/deepagents/examples/nvidia_deep_agent,
-nhưng thay vì dùng Anthropic (orchestrator) + NVIDIA NIM (researcher) riêng biệt,
-cả hai model đều gọi qua OpenRouter -> bạn CHỈ CẦN 1 key (OPENROUTER_API_KEY).
+A trimmed-down version of the official langchain-ai/deepagents/examples/nvidia_deep_agent
+example, but instead of using Anthropic (orchestrator) + NVIDIA NIM (researcher) as
+separate providers, both models are called through OpenRouter -> you only need 1 key
+(OPENROUTER_API_KEY).
 
-Ý tưởng multi-model (giống NVIDIA):
-  - Orchestrator: model mạnh, reasoning tốt (mặc định grok-4.5)
-  - Researcher sub-agent: model rẻ/nhanh, làm volume work (mặc định deepseek)
+Multi-model idea (like NVIDIA's setup):
+  - Orchestrator: strong model, good reasoning (default: grok-4.5)
+  - Researcher sub-agent: cheap/fast model, does the volume work (default: deepseek)
 
-Chạy:
-  cp .env.example .env          # điền OPENROUTER_API_KEY + TAVILY_API_KEY
+Run:
+  cp .env.example .env          # fill in OPENROUTER_API_KEY + TAVILY_API_KEY
   env -u PYTHONPATH uv run --no-sync .venv/bin/python scripts/B3_nemotron_deep_agent.py
 
-Biến môi trường (trong .env):
+Environment variables (in .env):
   OPENROUTER_API_KEY=sk-or-...
-  TAVILY_API_KEY=tvly-...                    # search thật (không có -> fallback mock)
+  TAVILY_API_KEY=tvly-...                    # real search (falls back to a mock without it)
   ORCHESTRATOR_MODEL=openrouter:x-ai/grok-4.5        # orchestrator
-  RESEARCHER_MODEL=openrouter:deepseek/deepseek-chat-v3  # sub-agent researcher
+  RESEARCHER_MODEL=openrouter:deepseek/deepseek-chat-v3  # researcher sub-agent
 """
 import os
 from datetime import datetime
@@ -26,9 +27,9 @@ from deepagents import create_deep_agent
 
 load_dotenv()
 
-# Orchestrator: model mạnh, planning/synthesis (như frontier model bên NVIDIA)
+# Orchestrator: strong model, planning/synthesis (like NVIDIA's frontier model)
 ORCHESTRATOR_MODEL = os.getenv("ORCHESTRATOR_MODEL", "openrouter:x-ai/grok-4.5")
-# Researcher: model rẻ/nhanh, làm volume work (như Nemotron Super bên NVIDIA)
+# Researcher: cheap/fast model, does the volume work (like NVIDIA's Nemotron Super)
 RESEARCHER_MODEL = os.getenv("RESEARCHER_MODEL", "openrouter:deepseek/deepseek-chat-v3")
 
 current_date = datetime.now().strftime("%Y-%m-%d")
@@ -52,8 +53,8 @@ def web_search(query: str) -> str:
 
 
 def main():
-    # Sub-agent researcher: chạy context cô lập, chỉ làm web research.
-    # Dùng dict spec (đã verify đúng API deepagents hiện tại).
+    # Sub-agent researcher: runs in an isolated context, only does web research.
+    # Uses a dict spec (verified to match the current deepagents API).
     researcher_sub = {
         "name": "researcher-agent",
         "description": (
@@ -68,7 +69,7 @@ def main():
         "model": RESEARCHER_MODEL,
     }
 
-    # Orchestrator agent: lập kế hoạch, ủy quyền cho researcher, tổng hợp kết quả.
+    # Orchestrator agent: plans the work, delegates to the researcher, synthesizes the result.
     orchestrator = create_deep_agent(
         model=ORCHESTRATOR_MODEL,
         tools=[web_search],

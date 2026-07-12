@@ -1,1 +1,1 @@
-- Always answer in bullet points, no paragraphs.
+User prefers answers in bullet points, no paragraphs.
