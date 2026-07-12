@@ -1,6 +1,21 @@
 # Deep Agents Hands-on Guide
 
-A hands-on sample project for practicing LangChain Deep Agents (verified on macOS aarch64, Python 3.12, uv 0.11).
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+![Python](https://img.shields.io/badge/python-3.11%2B-blue)
+![LangChain](https://img.shields.io/badge/built%20with-LangChain%20%2F%20LangGraph-1C3C3C)
+![Status](https://img.shields.io/badge/status-actively%20verified-brightgreen)
+
+A hands-on, **actually-run** guide to [LangChain Deep Agents](https://github.com/langchain-ai/deepagents) —
+not slides, not theory. Every script here has been executed against a real model API and its
+output is documented as-is, including the times it didn't work.
+
+It goes from a single agent with one tool, to the things a real deployment needs and tutorials
+usually skip: a durable checkpointer, human-in-the-loop approval gates, a real filesystem/shell
+agent that fixes real bugs, cross-thread long-term memory, and a regression eval that caught a
+real difference in behavior between models.
+
+**Read `README.md` top to bottom** — each step (B1–B8) builds on the previous one. Verified on
+macOS aarch64, Python 3.12, uv 0.11.
 
 ## Structure
 ```
