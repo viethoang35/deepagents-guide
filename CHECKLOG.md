@@ -77,6 +77,13 @@ to re-read the entire chat history.
   `pyproject.toml` in an earlier commit but `uv.lock` was only updated locally — committed the
   matching lock file.
 
+### Merged
+- `tracing-labs` merged into `main` (merge commit `f909668`, no conflicts) after the fixes and
+  live verification above. Re-ran `uv sync` + compiled every script on `main` post-merge to
+  confirm the merge didn't reintroduce anything broken. Branch deleted locally and on GitHub
+  after confirming `git branch --merged main` showed it fully merged.
+- `main` now has the complete B1–B12 sequence with no numbering collisions.
+
 ## 2026-07-12
 
 ### Added — scripts (agent)
