@@ -16,6 +16,8 @@ dependencies = [
     "langgraph-checkpoint-sqlite>=2.0.0",
     "pytest>=8.0.0",
     "requests>=2.32.0",
+    "arize-phoenix>=8.0.0",
+    "arize-phoenix-otel>=0.1.0",
 ]
 
 [build-system]
