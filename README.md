@@ -16,10 +16,11 @@ real difference in behavior between models. Then it applies that hardened base t
 problems: reviewing a git commit, triaging support tickets against a knowledge base, and
 triaging ops/infra logs.
 
-**Read `README.md` top to bottom** — Part 1 (Steps 1–8: `B2_*.py`–`B6_*.py` scripts, Step 7
-LangSmith is env-only with no script, Step 8's eval lives in `evals/` not a `B8_*.py` file)
-builds the harness step by step; Part 2 (Steps 9–11: `B9_*.py`–`B11_*.py`) applies it to real
-problems. Verified on macOS aarch64, Python 3.12, uv 0.11.
+**Read `README.md` top to bottom** — Part 1 (Steps 1–8) builds the harness step by step: Steps
+3–6 are `B3_*.py`–`B6_*.py`, Step 7 is LangSmith/Phoenix tracing (`B7_*.py`, `B7b_*.py`), Step 8 is
+eval (the plain pytest suite in `evals/`, plus cloud/local variants `B8_*.py`/`B8b_*.py`). Part 2
+(Steps 9–12) applies it to real problems: `B9_*.py`–`B11_*.py` are 3 real-world agents, `B12_*.py`
+adds cost/token tracking. Verified on macOS aarch64, Python 3.12, uv 0.11.
 
 ## Structure
 ```
@@ -33,9 +34,15 @@ deepagents-guide/
 │   ├── B4_hardened_agent.py       # durable checkpointer + human-in-the-loop + lightweight observability
 │   ├── B5_repo_ops_agent.py       # agent reads/edits REAL files + sub-agent runs REAL pytest (on the hardened base)
 │   ├── B6_cross_thread_memory.py  # memory=[...]: remembers ACROSS threads (unlike B4's checkpointer, which only remembers within 1 thread)
+│   ├── B7_langsmith_trace.py      # B3's orchestrator/researcher, wired for LangSmith tracing
+│   ├── B7b_multi_agent_trace.py   # same handoff, hand-built with StateGraph instead of create_deep_agent
+│   ├── B8_langsmith_eval.py       # pushes the repo-ops eval result to a LangSmith dataset + feedback
+│   ├── B8b_phoenix_eval.py        # same eval, against local Phoenix instead of LangSmith cloud (no API key needed)
 │   ├── B9_pr_review_agent.py      # real-world: reviews a real git diff, posts a HITL-gated review comment
+│   ├── B9_pr_review_agent_live.py # real-world: same, but against a REAL GitHub PR via the GitHub API
 │   ├── B10_support_triage_agent.py # real-world: answers support tickets grounded in a local knowledge base, escalates what it can't answer
-│   └── B11_ops_infra_triage_agent.py # real-world: triages real log files, files a HITL-gated incident; enforces read-only via FilesystemPermission
+│   ├── B11_ops_infra_triage_agent.py # real-world: triages real log files, files a HITL-gated incident; enforces read-only via FilesystemPermission
+│   └── B12_cost_tracking.py       # measures tokens + estimates $ cost per agent run, optionally to LangSmith/Phoenix
 ├── evals/
 │   └── test_repo_ops_eval.py      # pytest: does the B5 agent still fix the bug correctly when you swap models?
 ├── vendor-deepagents/      # clone of langchain-ai/deepagents (e.g. nvidia_deep_agent example)
@@ -140,11 +147,11 @@ answers according to that preference — proving the memory lives outside the sc
 env -u PYTHONPATH uv run --no-sync .venv/bin/python scripts/B6_cross_thread_memory.py
 ```
 
-## Step 7 (optional) — LangSmith tracing
+## Step 7 — LangSmith tracing
 Applies to **every** script above with zero code changes — LangChain reads this env var
 automatically. Set it in `.env` (see `.env.example`):
 ```
-LANGSMITH_TRACING=true
+LANGCHAIN_TRACING_V2=true
 LANGSMITH_API_KEY=lsv2_...
 LANGSMITH_PROJECT=deepagents-guide
 ```
@@ -153,8 +160,21 @@ per-step token usage) will show up on smith.langchain.com under that project nam
 easier to debug than reading console logs. Most useful for B3/B5 since they have several
 orchestrator ↔ sub-agent steps that are hard to follow via print statements.
 
-Note: this has only been verified as *mechanically correct* (a standard LangChain env var, no code
-required) — it hasn't been tested end-to-end with a real LangSmith key since this machine doesn't have one.
+Two dedicated scripts exercise this directly, and always run the agent for real (with just
+`OPENROUTER_API_KEY`) regardless of whether a LangSmith key is set — tracing is a bonus layered
+on top via env vars, not a precondition to run them at all:
+- `B7_langsmith_trace.py` — the B3 multi-model orchestrator/researcher, wired for tracing.
+- `B7b_multi_agent_trace.py` — the same orchestrator/researcher handoff, but hand-built with
+  `StateGraph` instead of `create_deep_agent`, to show the delegation mechanism explicitly.
+
+```bash
+env -u PYTHONPATH uv run --no-sync .venv/bin/python scripts/B7_langsmith_trace.py
+env -u PYTHONPATH uv run --no-sync .venv/bin/python scripts/B7b_multi_agent_trace.py
+```
+
+Verified end-to-end with a real LangSmith key: ran both scripts, then queried the LangSmith API
+directly (`client.list_runs(project_name="deepagents-guide", is_root=True)`) and confirmed a real
+run landed with a matching timestamp — not just trusting the script's own "open this URL" message.
 
 ## Step 8 — Eval: does the B5 agent still fix the bug correctly after swapping models?
 `evals/test_repo_ops_eval.py` is a plain pytest file (no LangSmith required, unlike the full eval
@@ -176,10 +196,42 @@ Actually verified: running with the 2 default models (`gpt-4o-mini` and `deepsee
 fixing the bug in that run. This is exactly the value of this eval: you find out immediately when
 swapping models breaks something, instead of manually running B5 and reading the log step by step.
 
+Two more variants push that same eval result somewhere queryable instead of only printing to
+console:
+- `B8_langsmith_eval.py` — pushes results to a LangSmith dataset (`repo-ops-eval`) as feedback
+  scores, so you can compare models on the LangSmith UI. Requires both `LANGSMITH_API_KEY` and
+  `OPENROUTER_API_KEY`; without them it only verifies the wiring (no API calls).
+- `B8b_phoenix_eval.py` — the same idea against **local** [Arize Phoenix](https://github.com/Arize-ai/phoenix)
+  instead of LangSmith cloud — no account, no API key beyond OpenRouter, $0. Start Phoenix first
+  (`uv run --no-sync python -m phoenix.server.main serve`), then run the eval; open
+  `http://localhost:6006` to see the comparison.
+
+```bash
+env -u PYTHONPATH uv run --no-sync .venv/bin/python scripts/B8_langsmith_eval.py
+env -u PYTHONPATH uv run --no-sync python -m phoenix.server.main serve &   # Terminal 1
+env -u PYTHONPATH uv run --no-sync .venv/bin/python scripts/B8b_phoenix_eval.py  # Terminal 2
+```
+
+Live-verified `B8b_phoenix_eval.py` against a real local Phoenix instance — both `gpt-4o-mini` and
+`deepseek-chat-v3` fixed the bug in that run (`pytest_pass=1.0`), and I confirmed the `eval_run`
+spans actually landed in Phoenix by querying its own API directly, not just trusting the script's
+console output.
+
+Also live-verified `B8_langsmith_eval.py` against a real LangSmith account: `gpt-4o-mini` passed
+and pushed `pytest_pass=1.0` feedback to a real run, confirmed by querying LangSmith's API
+directly for both the feedback and the `repo-ops-eval` dataset. In that same run,
+`deepseek-chat-v3` hit a real, separate failure mode — OpenRouter occasionally returns a tool
+call's `args` as a JSON-encoded string instead of a parsed object, which fails LangChain's message
+validation (`tool_calls.0.args: Input should be a valid dictionary`). The per-model `try/except`
+in `main()` caught it cleanly and the script continued to the next model — a good example of why
+that loop is wrapped in error handling at all.
+
 ## Part 2 — Real-world applications
 
 B1–B8 build the harness. These 3 apply it to actual problems, each reusing the same HITL/
-checkpointer patterns from Part 1 but pointed at a different domain.
+checkpointer patterns from Part 1 but pointed at a different domain. Step 12 rounds this out with
+cost/token tracking — not a "real-world application" exactly, but a harness concern that only
+matters once you're actually running agents for real.
 
 ## Step 9 — PR/code-review agent
 `B9_pr_review_agent.py` reviews a real git commit instead of fixing a repo directly (unlike B5).
@@ -238,6 +290,21 @@ connection timeouts in `api-service.log` — while ignoring the unrelated, norma
 `worker-service.log`, and filed a `high`-severity incident. (2) A direct adversarial test —
 instructing the agent to call `write_file` on `/hacked.txt`, then retrying `/tmp/hacked.txt` —
 got `Error: permission denied for write` both times, and no file was created on disk.
+
+## Step 12 — Cost & token tracking
+`B12_cost_tracking.py` answers the production question Steps 1-11 never priced out: how many
+tokens, and how many $, does one agent run cost — and which model is cheaper? It reads
+`usage_metadata` off the final message, estimates cost from a per-model `$-per-1M-tokens` table
+(`COST_TABLE` in the script — LLM pricing changes; treat it as a starting point, not ground
+truth), and optionally attaches the numbers to a local Phoenix span if Phoenix is running.
+
+```bash
+env -u PYTHONPATH uv run --no-sync .venv/bin/python scripts/B12_cost_tracking.py
+```
+
+Live-verified: ran against `gpt-4o-mini` (5367 input / 8 output tokens, ~$0.0008 estimated), and
+confirmed the `cost_run` span actually landed in a local Phoenix instance by querying Phoenix's
+own API — not just trusting the script's own "wrote a span" message.
 
 ## Common errors & fixes
 - `No module named 'pydantic_core._pydantic_core'`: caused by an inherited PYTHONPATH from another venv.
