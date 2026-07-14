@@ -1,17 +1,21 @@
 """
-B7b_multi_agent_trace.py — Multi-Agent tracing tự xây (LangGraph) + observability (Step 7b).
+B7b_multi_agent_trace.py — Hand-built multi-agent tracing with LangGraph (Step 7b).
 
-Khác B7 (Deep Agent đóng gói sẵn), script này TỰ XÂY multi-agent bằng StateGraph để
-minh họa RÕ cơ chế handoff: orchestrator ủy quyền cho researcher sub-agent.
-Đây là khái niệm cốt lõi trong wiki Deep-Agents: "sub-agents cô lập context".
+Unlike B7 (Deep Agents' built-in packaging), this script builds a multi-agent
+graph by hand with StateGraph to show the handoff mechanism explicitly:
+orchestrator delegates to a researcher sub-agent by passing the graph state
+forward. This is the core concept behind Deep Agents' "sub-agents get an
+isolated context" behavior, just without the framework doing it for you.
 
-Trace tree kỳ vọng (LangSmith/Phoenix):
+Expected trace tree (LangSmith/Phoenix):
   Run(graph) -> Run(node: orchestrator) -> Run(llm)
              -> Run(node: researcher)    -> Run(llm) -> Run(tool: web_search)
 
-Chạy OFFLINE (fake model) để verify cấu trúc không cần API:
-  OPENROUTER_API_KEY=sk-or-fake env -u PYTHONPATH uv run --no-sync .venv/bin/python scripts/B7b_multi_agent_trace.py
-Chạy THẬT (OpenRouter + LANGCHAIN_TRACING_V2=true): trace lên LangSmith/Phoenix.
+Run (falls back to a scripted fake model if OPENROUTER_API_KEY isn't set or is
+a known placeholder; a real-but-invalid key still hits the real API and reports
+a clean error instead of crashing):
+  env -u PYTHONPATH uv run --no-sync .venv/bin/python scripts/B7b_multi_agent_trace.py
+Run for real (with OpenRouter + LANGCHAIN_TRACING_V2=true): traces to LangSmith/Phoenix.
 """
 import os
 from dotenv import load_dotenv
@@ -23,20 +27,25 @@ from langchain_core.tools import tool
 load_dotenv()
 MODEL = os.getenv("DEEPAGENTS_MODEL", "openrouter:openai/gpt-4o-mini")
 
+FAKE_KEY_PREFIXES = ("sk-or-fake", "sk-or-xxx")
+
 
 @tool
 def web_search(query: str) -> str:
     """Search the web (mock)."""
-    return f"[web] Kết quả về '{query}': LangSmith trace mỗi bước của agent."
+    return f"[web] Results for '{query}': LangSmith traces every step of the agent."
+
+
+def _using_placeholder_key() -> bool:
+    key = os.getenv("OPENROUTER_API_KEY", "").strip()
+    return key.startswith(FAKE_KEY_PREFIXES) or key == ""
 
 
 def get_model():
-    key = os.getenv("OPENROUTER_API_KEY", "")
-    is_fake = (not key) or key.startswith("sk-or-fake") or key.startswith("sk-or-xxx")
-    if is_fake:
+    if _using_placeholder_key():
         return GenericFakeChatModel(messages=iter([
-            AIMessage(content="Tôi sẽ ủy quyền cho researcher tìm kiếm."),
-            AIMessage(content="Kết quả: LangSmith giúp trace từng bước agent."),
+            AIMessage(content="I'll delegate to the researcher to look this up."),
+            AIMessage(content="Result: LangSmith helps trace every step of an agent."),
         ]))
     from langchain.chat_models import init_chat_model
     return init_chat_model(MODEL)
@@ -45,26 +54,27 @@ def get_model():
 def orchestrator(state: MessagesState):
     model = get_model()
     resp = model.invoke([
-        SystemMessage(content="Bạn là orchestrator. Nếu cần thông tin, ủy quyền cho researcher."),
+        SystemMessage(content="You are the orchestrator. Delegate to the researcher if information is needed."),
         *state["messages"],
     ])
     return {"messages": [resp]}
 
 
 def researcher(state: MessagesState):
+    """Pick up where the orchestrator left off — the actual handoff, not a fresh question."""
     model = get_model()
     supports_tools = hasattr(model, "bind_tools") and not isinstance(model, GenericFakeChatModel)
     if supports_tools:
         decision = model.bind_tools([web_search]).invoke([
-            SystemMessage(content="Bạn là researcher. Dùng web_search rồi tóm tắt."),
-            HumanMessage(content="Tracing AI agent là gì?"),
+            SystemMessage(content="You are the researcher. Use web_search, then summarize."),
+            *state["messages"],
         ])
     else:
         decision = model.invoke([
-            SystemMessage(content="Bạn là researcher. Tóm tắt về tracing AI agent."),
-            HumanMessage(content="Tracing AI agent là gì?"),
+            SystemMessage(content="You are the researcher. Summarize what the orchestrator asked about."),
+            *state["messages"],
         ])
-    tool_out = web_search.invoke("AI agent tracing")
+    tool_out = web_search.invoke(state["messages"][-1].content if state["messages"] else "AI agent tracing")
     return {"messages": [decision, ToolMessage(content=tool_out, tool_call_id="demo")]}
 
 
@@ -73,8 +83,8 @@ def build_graph():
     g.add_node("orchestrator", orchestrator)
     g.add_node("researcher", researcher)
     g.add_edge(START, "orchestrator")
-    g.add_edge("orchestrator", "researcher")   # handoff (ủy quyền)
-    g.add_edge("researcher", END)              # researcher trả kết quả -> kết thúc
+    g.add_edge("orchestrator", "researcher")   # handoff (delegation)
+    g.add_edge("researcher", END)              # researcher returns the result -> done
     return g.compile()
 
 
@@ -83,15 +93,20 @@ def main() -> None:
     app = build_graph()
     print(f">>> Graph compiled: {type(app).__name__}")
 
-    key = os.getenv("OPENROUTER_API_KEY", "")
-    is_fake = (not key) or key.startswith("sk-or-fake") or key.startswith("sk-or-xxx")
-    if is_fake:
-        print("\n[OFFLINE] Fake model -> verify trace tree cấu trúc (không gọi API).")
+    fake = _using_placeholder_key()
+    if fake:
+        print("\n[OFFLINE] No OPENROUTER_API_KEY (or a placeholder) -> using a scripted fake model, no API call made.")
     else:
-        print(f"\n[THẬT] Trace gửi lên project '{os.getenv('LANGSMITH_PROJECT', 'deepagents-guide')}'.")
+        print(f"\n[LIVE] Tracing to project '{os.getenv('LANGSMITH_PROJECT', 'deepagents-guide')}' if LangSmith is enabled.")
 
-    result = app.invoke({"messages": [HumanMessage(content="Tracing AI agent là gì?")]})
-    print("\n=== Kết quả (messages) ===")
+    try:
+        result = app.invoke({"messages": [HumanMessage(content="What is AI agent tracing?")]})
+    except Exception as e:
+        print(f"\n>>> Graph run failed: {type(e).__name__}: {e}")
+        print(">>> Check OPENROUTER_API_KEY in .env is valid, or run without it to use the fake model.")
+        return
+
+    print("\n=== Result (messages) ===")
     for m in result["messages"]:
         t = type(m).__name__
         c = getattr(m, "content", "")

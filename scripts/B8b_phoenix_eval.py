@@ -1,27 +1,33 @@
 """
-B8b_phoenix_eval.py — Eval so sánh model TRÊN PHOENIX LOCAL (Step 8b, không cần key).
+B8b_phoenix_eval.py — Compare models on LOCAL PHOENIX, no API key needed (Step 8b).
 
-Khác B8 (đẩy lên LangSmith cloud cần LANGSMITH_API_KEY), B8b ghi toàn bộ eval
-trace + điểm pytest_pass vào **Phoenix chạy local** (http://localhost:6006) ->
-so sánh model HOÀN TOÀN OFFLINE, KHÔNG cần LangSmith account, $0.
+Unlike B8 (pushes to LangSmith cloud, needs LANGSMITH_API_KEY), B8b writes the
+full eval trace + pytest_pass score to **Phoenix running locally**
+(http://localhost:6006) -> compare models COMPLETELY OFFLINE, no LangSmith
+account, $0.
 
-Flow mỗi model:
-  1. Copy workspace/sample-repo (bug có chủ ý) vào tmp.
-  2. Build repo-ops agent (tái dùng B5) + chạy auto-approve.
-  3. Chạy pytest thật trong tmp -> pytest_pass = 1.0 nếu pass, 0.0 nếu fail.
-  4. Ghi 1 span "eval_run" vào Phoenix với attributes: model, pytest_pass, returncode.
-  -> Mở localhost:6006 -> xem bảng so sánh gpt-4o-mini vs deepseek (pass/fail, latency).
+Per-model flow:
+  1. Copy workspace/sample-repo (intentional bug) into a tmp directory.
+  2. Build the repo-ops agent (reusing B5) and run it with auto-approve.
+  3. Run real pytest in the tmp dir -> pytest_pass = 1.0 if it passes, 0.0 if it fails.
+  4. Record 1 "eval_run" span in Phoenix with attributes: model, pytest_pass, returncode.
+     If the run itself errored (e.g. an invalid API key) instead of the model
+     genuinely failing the task, that's recorded as eval.status="error" with the
+     error message, and excluded from the pass/fail comparison — an
+     infrastructure failure should never look like "the model failed the bug fix."
+  -> Open localhost:6006 -> see the comparison table for gpt-4o-mini vs deepseek
+     (pass/fail, latency).
 
-Chạy Phoenix trước (Terminal 1):
+Start Phoenix first (Terminal 1):
   env -u PYTHONPATH uv run --no-sync python -m phoenix.server.main serve
-Chạy eval (Terminal 2):
-  # OFFLINE (fake model, verify không gọi API):
+Run the eval (Terminal 2):
+  # OFFLINE (fake model, verifies wiring without calling the API):
   OPENROUTER_API_KEY=sk-or-fake env -u PYTHONPATH uv run --no-sync .venv/bin/python scripts/B8b_phoenix_eval.py
-  # THẬT (cần OPENROUTER_API_KEY hợp lệ):
+  # LIVE (needs a valid OPENROUTER_API_KEY):
   env -u PYTHONPATH uv run --no-sync .venv/bin/python scripts/B8b_phoenix_eval.py
 
-Lưu ý: B5 dùng LocalShellBackend (KHÔNG sandbox) -> chỉ chạy trên tmp copy của
-sample-repo. Không auto-approve trên máy có dữ liệu quan trọng.
+Note: B5 uses LocalShellBackend (NO sandbox) -> only ever runs against a tmp
+copy of sample-repo. Never auto-approve on a machine with data you care about.
 """
 import os
 import shutil
@@ -29,7 +35,6 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
-from datetime import datetime
 
 from dotenv import load_dotenv
 from opentelemetry import trace
@@ -61,7 +66,7 @@ PROJECT = os.getenv("LANGSMITH_PROJECT", "deepagents-guide")
 
 
 def setup_tracer():
-    """Đăng ký tracer gửi vào Phoenix local (http://localhost:6006/v1/traces)."""
+    """Register a tracer that ships spans to Phoenix running locally (http://localhost:6006/v1/traces)."""
     provider = TracerProvider()
     try:
         from phoenix.otel import register
@@ -69,12 +74,12 @@ def setup_tracer():
             project_name=f"{PROJECT}-phoenix-eval",
             endpoint="http://localhost:6006/v1/traces",
         )
-        print(f">>> Đã đăng ký tracer với Phoenix local (project '{PROJECT}-phoenix-eval')")
+        print(f">>> Registered tracer with local Phoenix (project '{PROJECT}-phoenix-eval')")
     except Exception as e:
         provider.add_span_processor(SimpleSpanProcessor(ConsoleSpanExporter()))
         trace.set_tracer_provider(provider)
-        print(f">>> (warn) Không kết nối Phoenix ({e}). Dùng ConsoleSpanExporter (in ra stdout).")
-        print("         Để xem UI: chạy `uv run --no-sync python -m phoenix.server.main serve`.")
+        print(f">>> (warn) Could not connect to Phoenix ({e}). Using ConsoleSpanExporter (prints to stdout).")
+        print("         To see the UI: run `uv run --no-sync python -m phoenix.server.main serve`.")
     return trace.get_tracer(__name__)
 
 
@@ -83,10 +88,12 @@ def has_openrouter_key() -> bool:
     return k.startswith("sk-or-") and len(k) > 20
 
 
-def run_model_eval(model: str, tracer, *, fake: bool = False) -> float:
-    """Chạy eval 1 model trong tmp repo, trả pytest_pass (1.0/0.0).
-    Nếu fake=True (offline): BỎ QUA agent (Deep Agent gọi model khi build),
-    chỉ chạy pytest thật trên sample-repo để sinh span có điểm thực lên Phoenix."""
+def run_model_eval(model: str, tracer, *, fake: bool = False) -> float | None:
+    """Run the eval for 1 model in a tmp repo, return pytest_pass (1.0/0.0), or
+    None if the run itself errored (infrastructure failure, not a model failure).
+    If fake=True (offline): SKIP the agent (Deep Agent would call the model when
+    built), only run real pytest against sample-repo as-is to produce a genuine
+    span for Phoenix."""
     dest = Path(tempfile.mkdtemp()) / "sample-repo"
     shutil.copytree(SAMPLE_REPO, dest, ignore=shutil.ignore_patterns("__pycache__", ".pytest_cache"))
 
@@ -94,20 +101,28 @@ def run_model_eval(model: str, tracer, *, fake: bool = False) -> float:
         span.set_attribute("eval.model", model)
         span.set_attribute("eval.fake", fake)
         if fake:
-            # Offline: không build agent (tránh gọi OpenRouter). Dùng pytest làm proxy điểm.
+            # Offline: don't build the agent (avoid calling OpenRouter). pytest's
+            # result on the unmodified repo stands in for a real score.
             span.set_attribute("eval.mode", "offline-proxy")
         else:
             from langgraph.checkpoint.memory import MemorySaver
             from scripts.B5_repo_ops_agent import build_repo_ops_agent, run_to_completion
-            agent = build_repo_ops_agent(model, dest, MemorySaver())
-            config = {"configurable": {"thread_id": f"eval-{model}"}}
-            run_to_completion(agent, config, USER_MSG, interactive=False)
+            try:
+                agent = build_repo_ops_agent(model, dest, MemorySaver())
+                config = {"configurable": {"thread_id": f"eval-{model}"}}
+                run_to_completion(agent, config, USER_MSG, interactive=False)
+            except Exception as e:
+                span.set_attribute("eval.status", "error")
+                span.set_attribute("eval.error", str(e))
+                print(f">>> [{model}] agent run errored (not a model failure): {e}")
+                return None
 
         result = subprocess.run(
             [sys.executable, "-m", "pytest", "-q"],
             cwd=dest, capture_output=True, text=True, timeout=60,
         )
         score = 1.0 if result.returncode == 0 else 0.0
+        span.set_attribute("eval.status", "ok")
         span.set_attribute("eval.pytest_pass", score)
         span.set_attribute("eval.pytest_returncode", result.returncode)
         print(f">>> [{model}] returncode={result.returncode} pytest_pass={score}")
@@ -120,23 +135,20 @@ def main() -> None:
 
     fake = not has_openrouter_key()
     if fake:
-        print("\n[OFFLINE] Thiếu OPENROUTER_API_KEY thật -> chạy eval bằng FAKE model "
-              "(không gọi API), vẫn ghi span vào Phoenix để verify pipeline.")
+        print("\n[OFFLINE] No valid OPENROUTER_API_KEY -> running the eval with a FAKE model "
+              "(no API calls), still recording spans in Phoenix to verify the pipeline.")
     else:
-        print("\n[THẬT] Chạy eval với model thật qua OpenRouter, ghi trace vào Phoenix.")
+        print("\n[LIVE] Running the eval with a real model via OpenRouter, recording traces to Phoenix.")
 
-    scores = {}
+    scores: dict[str, float | None] = {}
     for model in MODELS:
-        try:
-            scores[model] = run_model_eval(model, tracer, fake=fake)
-        except Exception as e:
-            print(f">>> [{model}] eval lỗi: {e}")
-            scores[model] = 0.0
+        scores[model] = run_model_eval(model, tracer, fake=fake)
 
-    print("\n=== Tóm tắt eval (so sánh model) ===")
+    print("\n=== Eval summary (model comparison) ===")
     for m, s in scores.items():
-        print(f"  {m}: pytest_pass={s}")
-    print(f"\n>>> Mở http://localhost:6006 (project '{PROJECT}-phoenix-eval') để xem trace + so sánh.")
+        label = "ERROR (infra failure, not a model result)" if s is None else f"pytest_pass={s}"
+        print(f"  {m}: {label}")
+    print(f"\n>>> Open http://localhost:6006 (project '{PROJECT}-phoenix-eval') to see traces + comparison.")
 
 
 if __name__ == "__main__":

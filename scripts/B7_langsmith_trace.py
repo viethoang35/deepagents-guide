@@ -1,26 +1,33 @@
 """
-B7_langsmith_trace.py — Deep Agent + LangSmith tracing (Step 7, mở rộng trên branch tracing-labs).
+B7_langsmith_trace.py — Deep Agent + LangSmith tracing (Step 7 gets a real script).
 
-Mở rộng từ B3 (multi-model Deep Agent) nhưng THÊM lớp observability production:
-gửi TOÀN BỘ trajectory (orchestrator -> researcher sub-agent -> tool -> llm)
-lên LangSmith cloud qua env vars (không sửa create_deep_agent).
+Extends B3 (multi-model Deep Agent) with the production observability layer that
+Step 7 previously only described in words: sending the FULL trajectory
+(orchestrator -> researcher sub-agent -> tool -> llm) to LangSmith cloud via env
+vars alone (no changes to create_deep_agent).
 
-So với B4 (chỉ log local qua callback handler), B7 gửi trace lên UI LangSmith để:
-  - xem cây run phân nhánh (từng sub-agent = 1 node)
-  - đo latency / token / cost từng bước
-  - gắn feedback / chấm điểm (dùng cho B8 eval)
+Unlike B4 (local-only logging via a callback handler), B7 ships the trace to the
+LangSmith UI so you can:
+  - see the branching run tree (each sub-agent = 1 node)
+  - measure latency / tokens / cost per step
+  - attach feedback / scores (used by B8's eval)
 
-Cách bật (trong .env, KHÔNG sửa code):
-  LANGCHAIN_TRACING_V2=true        # chuẩn LangChain hiện tại
+The agent always runs for real as long as OPENROUTER_API_KEY is valid — tracing
+to LangSmith is a bonus layered on top via env vars, not a precondition to run
+the script at all (this mirrors B3/B4: the agent's own behavior should always be
+verifiable even without extra observability tooling turned on).
+
+Enable tracing (in .env, no code changes):
+  LANGCHAIN_TRACING_V2=true       # current standard LangChain env var
   LANGSMITH_API_KEY=lsv2_...
   LANGSMITH_PROJECT=deepagents-guide
 
-Chạy OFFLINE (fake key) để verify cấu trúc không cần API:
+Run (works with just OPENROUTER_API_KEY; tracing is skipped if no LangSmith key):
   env -u PYTHONPATH uv run --no-sync .venv/bin/python scripts/B7_langsmith_trace.py
-Chạy THẬT (cần OPENROUTER_API_KEY + LANGSMITH_API_KEY): trace lên smith.langchain.com.
 
-Liên kết: tương đương Lab06/Lab07 trong dự án langsmith-tracing-labs, nhưng gắn
-trực tiếp vào deepagents-guide với convention B-series.
+Not yet verified end-to-end against a real LangSmith account (no key on this
+machine) — the agent invocation itself is real and live-verified; only the
+"trace actually shows up on smith.langchain.com" part is unverified.
 """
 import os
 from datetime import datetime
@@ -35,7 +42,7 @@ current_date = datetime.now().strftime("%Y-%m-%d")
 
 
 def web_search(query: str) -> str:
-    """Search the web (mock khi không có Tavily key — đủ để verify trace)."""
+    """Search the web (mock when no Tavily key is set — enough to exercise the trace)."""
     api_key = os.getenv("TAVILY_API_KEY")
     if not api_key:
         return f"[mock search] results for '{query}': NVIDIA, LangChain, arXiv, HuggingFace."
@@ -69,27 +76,35 @@ def build_agent():
     )
 
 
+def tracing_enabled() -> bool:
+    on = os.getenv("LANGCHAIN_TRACING_V2", os.getenv("LANGSMITH_TRACING", "false")).lower() == "true"
+    key = os.getenv("LANGSMITH_API_KEY", "").strip()
+    return on and key.startswith("lsv2_") and len(key) > 20
+
+
 def main() -> None:
     print(f">>> B7 LangSmith tracing | Orchestrator={ORCHESTRATOR_MODEL} Researcher={RESEARCHER_MODEL}")
-    tracing = os.getenv("LANGCHAIN_TRACING_V2", os.getenv("LANGSMITH_TRACING", "false"))
-    key = os.getenv("LANGSMITH_API_KEY", "")
+    tracing = tracing_enabled()
     print(f">>> LangSmith tracing = {tracing} | project = {os.getenv('LANGSMITH_PROJECT', 'deepagents-guide')}")
 
     agent = build_agent()
-    print(f">>> Agent compiled: {type(agent).__name__} (kỳ vọng CompiledStateGraph)")
-
-    is_fake = (not key) or key.startswith("lsv2_xxx") or key.startswith("ls__")
-    if is_fake:
-        print("\n[OFFLINE] Thiếu LANGSMITH_API_KEY thật -> verify cấu trúc, không gửi trace.")
-        print("Để trace THẬT: .env có LANGCHAIN_TRACING_V2=true + LANGSMITH_API_KEY thật + OPENROUTER_API_KEY thật")
-        return
 
     user_msg = "Research 'agent harness security best practices' and summarize in 3 bullet points."
     print(f">>> User: {user_msg}\n")
-    result = agent.invoke({"messages": [{"role": "user", "content": user_msg}]})
+    try:
+        result = agent.invoke({"messages": [{"role": "user", "content": user_msg}]})
+    except Exception as e:
+        print(f">>> Agent call failed: {type(e).__name__}: {e}")
+        print(">>> Check OPENROUTER_API_KEY in .env is valid.")
+        return
+
     final = result["messages"][-1]
     print(f">>> Agent: {getattr(final, 'content', final)}\n")
-    print(">>> Mở https://smith.langchain.com/project/deepagents-guide để xem run tree.")
+
+    if tracing:
+        print(f">>> Open https://smith.langchain.com/project/{os.getenv('LANGSMITH_PROJECT', 'deepagents-guide')} to see the run tree.")
+    else:
+        print(">>> Ran without LangSmith tracing (no LANGSMITH_API_KEY set) — agent output above is real, trace upload was skipped.")
 
 
 if __name__ == "__main__":

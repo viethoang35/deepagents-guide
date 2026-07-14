@@ -1,22 +1,22 @@
 """
-B9_cost_tracking.py — Cost & token tracking cho Deep Agent (Step 9, mở rộng tracing-labs).
+B12_cost_tracking.py — Cost & token tracking for a Deep Agent (Step 12).
 
-Đo tokens (input/output/total) + ước tính CHI PHÍ ($) cho mỗi lần chạy agent,
-gắn vào trace (LangSmith nếu bật, hoặc Phoenix local). Giúp trả lời câu hỏi
-sản xuất: "1 lần agent chạy tốn bao nhiêu token / bao nhiêu $? model nào rẻ hơn?"
+Measures tokens (input/output/total) + estimates the COST ($) of a single agent
+run, and attaches it to a trace (LangSmith if enabled, or local Phoenix). Helps
+answer the production question: "how many tokens / how many $ does one agent
+run cost? which model is cheaper?"
 
-Cách ước tính cost: bảng giá từng model (token / 1M). Giá LLM thay đổi ->
-chỉ là ước tính hướng dẫn, để trong COST_TABLE dưới, update khi cần.
+Cost estimation: a per-model price table (per 1M tokens). LLM pricing changes
+often -> this is a guiding estimate, kept in COST_TABLE below, update as needed.
 
-Chạy OFFLINE (fake key) -> verify logic tính cost, KHÔNG gọi API:
-  OPENROUTER_API_KEY=sk-or-fake env -u PYTHONPATH uv run --no-sync .venv/bin/python scripts/B9_cost_tracking.py
-Chạy THẬT (cần OPENROUTER_API_KEY):
-  env -u PYTHONPATH uv run --no-sync .venv/bin/python scripts/B9_cost_tracking.py
-  (nếu LANGCHAIN_TRACING_V2=true + LANGSMITH_API_KEY -> trace + cost lên LangSmith)
-  (nếu Phoenix chạy local -> cost span lên localhost:6006)
+Run offline (no/placeholder key) -> verifies the cost-calculation logic, makes no API call:
+  OPENROUTER_API_KEY=sk-or-fake env -u PYTHONPATH uv run --no-sync .venv/bin/python scripts/B12_cost_tracking.py
+Run for real (needs a valid OPENROUTER_API_KEY):
+  env -u PYTHONPATH uv run --no-sync .venv/bin/python scripts/B12_cost_tracking.py
+  (with LANGCHAIN_TRACING_V2=true + LANGSMITH_API_KEY -> trace + cost go to LangSmith)
+  (with Phoenix running locally -> the cost span goes to localhost:6006)
 """
 import os
-from datetime import datetime
 from dotenv import load_dotenv
 from deepagents import create_deep_agent
 from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
@@ -26,8 +26,8 @@ load_dotenv()
 
 MODEL = os.getenv("DEEPAGENTS_MODEL", "openrouter:openai/gpt-4o-mini")
 
-# Bảng giá ước tính (USD per 1M tokens) — tham khảo, update khi giá thay đổi.
-# Key = model string dùng trong OpenRouter.
+# Estimated pricing (USD per 1M tokens) — reference only, update when prices change.
+# Key = the model string used with OpenRouter.
 COST_TABLE = {
     "openrouter:openai/gpt-4o-mini":       {"in": 0.15, "out": 0.60},
     "openrouter:deepseek/deepseek-chat-v3": {"in": 0.27, "out": 1.10},
@@ -36,7 +36,7 @@ COST_TABLE = {
 
 
 def estimate_cost(model: str, in_tok: int, out_tok: int) -> float:
-    """Ước tính $ từ token theo COST_TABLE."""
+    """Estimate $ from token counts using COST_TABLE."""
     rate = COST_TABLE.get(model, {"in": 1.0, "out": 2.0})  # default fallback
     return (in_tok / 1_000_000) * rate["in"] + (out_tok / 1_000_000) * rate["out"]
 
@@ -52,8 +52,9 @@ def build_agent(use_fake: bool):
         return f"It's sunny in {city}!"
 
     if use_fake:
-        # GenericFakeChatModel không có bind_tools -> Deep Agent gọi khi build -> lỗi.
-        # Subclass override bind_tools để offline verify không gọi API.
+        # GenericFakeChatModel has no bind_tools -> Deep Agent calls it while
+        # building -> error. Subclass to override bind_tools so offline
+        # verification never makes an API call.
         class FakeModel(GenericFakeChatModel):
             def bind_tools(self, *a, **k):
                 return self
@@ -66,7 +67,7 @@ def build_agent(use_fake: bool):
 
 
 def extract_tokens(result) -> tuple[int, int, int]:
-    """Lấy token từ message cuối (usage_metadata)."""
+    """Pull token counts from the last message's usage_metadata."""
     msgs = result.get("messages", [])
     last = msgs[-1] if msgs else None
     um = getattr(last, "usage_metadata", None)
@@ -79,16 +80,22 @@ def extract_tokens(result) -> tuple[int, int, int]:
 
 def main() -> None:
     fake = not has_openrouter_key()
-    print(f">>> B9 cost tracking | model={MODEL} | mode={'OFFLINE(fake)' if fake else 'THẬT'}")
+    print(f">>> B12 cost tracking | model={MODEL} | mode={'OFFLINE(fake)' if fake else 'LIVE'}")
     agent = build_agent(fake)
 
-    result = agent.invoke({"messages": [{"role": "user", "content": "Weather in Hanoi?"}]})
+    try:
+        result = agent.invoke({"messages": [{"role": "user", "content": "Weather in Hanoi?"}]})
+    except Exception as e:
+        print(f">>> Agent call failed: {type(e).__name__}: {e}")
+        print(">>> Check OPENROUTER_API_KEY in .env is valid.")
+        return
+
     in_t, out_t, tot_t = extract_tokens(result)
     cost = estimate_cost(MODEL, in_t, out_t)
     print(f">>> tokens: in={in_t} out={out_t} total={tot_t}")
-    print(f">>> estimated cost: ${cost:.6f}  (theo COST_TABLE)")
+    print(f">>> estimated cost: ${cost:.6f}  (per COST_TABLE)")
 
-    # Ghi vào Phoenix nếu chạy local (best-effort, không fail nếu không có)
+    # Write to Phoenix if it's running locally (best-effort, doesn't fail the run if not)
     try:
         from opentelemetry import trace
         from opentelemetry.sdk.trace import TracerProvider
@@ -102,9 +109,9 @@ def main() -> None:
             span.set_attribute("cost.output_tokens", out_t)
             span.set_attribute("cost.total_tokens", tot_t)
             span.set_attribute("cost.est_usd", cost)
-        print(">>> Đã ghi cost span vào Phoenix (project 'deepagents-guide-cost').")
+        print(">>> Wrote a cost span to Phoenix (project 'deepagents-guide-cost').")
     except Exception as e:
-        print(f">>> (info) Phoenix không khả dụng ({e}) — bỏ qua ghi cost span.")
+        print(f">>> (info) Phoenix not available ({e}) — skipped writing the cost span.")
 
 
 if __name__ == "__main__":

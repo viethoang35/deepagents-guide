@@ -1,30 +1,40 @@
 """
-B8_langsmith_eval.py — Eval -> LangSmith dataset + feedback (Step 8, mở rộng tracing-labs).
+B8_langsmith_eval.py — Eval results pushed to LangSmith (dataset + feedback) (Step 8, cloud variant).
 
-Nối tiếp B7 (trace) và test_repo_ops_eval.py (đã có). Thay vì chỉ đọc kết quả pytest
-trên console, B8 ĐẨY kết quả eval lên LangSmith để:
-  1. Tạo dataset `repo-ops-eval` (mỗi example = 1 model cần đánh giá).
-  2. Chạy B5 repo-ops agent trên từng model (tái dùng build_repo_ops_agent/run_to_completion).
-  3. Gửi feedback `pytest_pass` (1.0 / 0.0) lên run tương ứng -> so sánh model có số
-     trên LangSmith UI (giống wiki đã ghi: gpt-4o-mini PASS, deepseek FAIL).
+Builds on B7 (tracing) and the existing evals/test_repo_ops_eval.py. Instead of
+only reading pytest results on the console, this pushes the eval outcome to
+LangSmith so you can:
+  1. Create a `repo-ops-eval` dataset (each example = 1 model under evaluation).
+  2. Run the B5 repo-ops agent per model (reusing build_repo_ops_agent/run_to_completion).
+  3. Attach a `pytest_pass` (1.0 / 0.0) feedback score to the exact run for that
+     model, so you can compare models on the LangSmith UI.
 
-Cách bật (trong .env):
+Feedback is attached via an explicit `run_id` passed through the invoke config
+— not by searching for it afterward. `client.list_runs(filter=...)` takes a
+query DSL string (e.g. `'eq(run_type, "chain")'`), not raw JSON; searching by
+`{"thread_id": ...}` (the original approach here) would silently return no
+matches. Generating the run_id ourselves and reusing it directly with
+`create_feedback` sidesteps that entirely.
+
+Enable (in .env):
   LANGCHAIN_TRACING_V2=true
   LANGSMITH_API_KEY=lsv2_...
   LANGSMITH_PROJECT=deepagents-guide
-  OPENROUTER_API_KEY=sk-or-...        # B5 gọi model thật
+  OPENROUTER_API_KEY=sk-or-...        # B5 calls a real model
 
-Chạy OFFLINE (thiếu key) -> verify cấu trúc, không gọi API:
+Run offline (missing LangSmith key) -> verifies wiring, makes no LangSmith API calls:
   env -u PYTHONPATH uv run --no-sync .venv/bin/python scripts/B8_langsmith_eval.py
-Chạy THẬT: điền đủ key, eval sẽ tạo dataset + gửi feedback lên LangSmith.
+Run for real: fill in both keys; the eval will create the dataset + push feedback to LangSmith.
 
-Lưu ý: B5 dùng LocalShellBackend (KHÔNG sandbox) -> chỉ chạy trên sample-repo
-copy trong tmp (fixture đã làm vậy). Không chạy auto-approve trên máy có dữ liệu quan trọng.
+Note: B5 uses LocalShellBackend (NO sandbox) -> only ever runs against a tmp copy
+of sample-repo (the fixture already does this). Never run with auto-approve on a
+machine with data you care about.
 """
 import os
 import shutil
 import subprocess
 import sys
+import uuid
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -54,34 +64,34 @@ MODELS = tuple(
 
 
 def has_langsmith_key() -> bool:
-    """Chỉ THẬT khi key có định dạng hợp lệ: bắt đầu bằng 'lsv2_' và dài > 20 ký tự.
-    Mọi giá trị giả (lsv2_xxx, ls__, rỗng) -> False -> chạy offline, KHÔNG gọi API."""
+    """Only real when the key has a valid shape: starts with 'lsv2_' and is longer than 20 chars.
+    Any placeholder value (lsv2_xxx, ls__, empty) -> False -> run offline, no API calls."""
     k = os.getenv("LANGSMITH_API_KEY", "").strip()
     return k.startswith("lsv2_") and len(k) > 20
 
 
 def has_openrouter_key() -> bool:
-    """Chỉ THẬT khi key OpenRouter hợp lệ: bắt đầu bằng 'sk-or-' và dài > 20 ký tự."""
+    """Only real when the OpenRouter key has a valid shape: starts with 'sk-or-' and is longer than 20 chars."""
     k = os.getenv("OPENROUTER_API_KEY", "").strip()
     return k.startswith("sk-or-") and len(k) > 20
 
 
 def build_dataset(client) -> None:
-    """Tạo dataset repo-ops-eval (idempotent: bỏ qua nếu đã có)."""
+    """Create the repo-ops-eval dataset (idempotent: skip if it already exists)."""
     try:
         client.create_dataset(
             DATASET_NAME,
             description="Repo-ops eval: does the B5 agent fix the intentional bug per model?",
         )
-        print(f">>> Đã tạo dataset '{DATASET_NAME}'")
+        print(f">>> Created dataset '{DATASET_NAME}'")
     except Exception as e:
-        # dataset đã tồn tại hoặc lỗi khác -> bỏ qua để tiếp tục
-        print(f">>> Dataset '{DATASET_NAME}' đã có hoặc bỏ qua: {e}")
+        # dataset already exists, or some other error -> skip and continue
+        print(f">>> Dataset '{DATASET_NAME}' already exists or was skipped: {e}")
 
 
 def run_model_eval(model: str, client) -> float:
-    """Chạy B5 agent trên 1 model (trong tmp repo), trả về 1.0 nếu pytest pass, 0.0 nếu fail.
-    Gửi feedback lên LangSmith nếu có key thật."""
+    """Run the B5 agent for 1 model (in a tmp repo), return 1.0 if pytest passes, 0.0 if it fails.
+    Pushes feedback to LangSmith on the exact run, via an explicit run_id, if a client is set."""
     from langgraph.checkpoint.memory import MemorySaver
     from scripts.B5_repo_ops_agent import build_repo_ops_agent, run_to_completion
 
@@ -90,7 +100,8 @@ def run_model_eval(model: str, client) -> float:
     shutil.copytree(SAMPLE_REPO, dest, ignore=shutil.ignore_patterns("__pycache__", ".pytest_cache"))
 
     agent = build_repo_ops_agent(model, dest, MemorySaver())
-    config = {"configurable": {"thread_id": f"eval-{model}"}}
+    run_id = uuid.uuid4()
+    config = {"configurable": {"thread_id": f"eval-{model}"}, "run_id": run_id}
     run_to_completion(agent, config, USER_MSG, interactive=False)
 
     result = subprocess.run(
@@ -102,17 +113,10 @@ def run_model_eval(model: str, client) -> float:
 
     if client is not None:
         try:
-            # Gắn feedback lên run cuối của thread (best-effort)
-            runs = list(client.list_runs(
-                project_name=os.getenv("LANGSMITH_PROJECT", "deepagents-guide"),
-                filter=f'{{"thread_id": "{config["configurable"]["thread_id"]}"}}',
-                limit=1,
-            ))
-            if runs:
-                client.create_feedback(runs[0].id, "pytest_pass", score=score)
-                print(f">>> Đã gửi feedback pytest_pass={score} lên run {runs[0].id}")
+            client.create_feedback(run_id, "pytest_pass", score=score)
+            print(f">>> Pushed pytest_pass={score} feedback to run {run_id}")
         except Exception as e:
-            print(f">>> (warn) gửi feedback thất bại: {e}")
+            print(f">>> (warn) failed to push feedback: {e}")
     return score
 
 
@@ -124,24 +128,24 @@ def main() -> None:
         client = Client()
         build_dataset(client)
     else:
-        print("\n[OFFLINE] Thiếu LANGSMITH_API_KEY hoặc OPENROUTER_API_KEY thật (định dạng hợp lệ) "
-              "-> verify cấu trúc, KHÔNG gọi API.")
-        print("Để eval THẬT: .env có LANGCHAIN_TRACING_V2=true + LANGSMITH_API_KEY (lsv2_...) + OPENROUTER_API_KEY (sk-or-...).")
-        # Offline: vẫn import được B5 để chứng minh wiring đúng
+        print("\n[OFFLINE] Missing a valid LANGSMITH_API_KEY or OPENROUTER_API_KEY "
+              "-> verifying wiring only, no API calls made.")
+        print("For a real eval: .env needs LANGCHAIN_TRACING_V2=true + LANGSMITH_API_KEY (lsv2_...) + OPENROUTER_API_KEY (sk-or-...).")
+        # Offline: still confirm B5 imports correctly to prove the wiring is right
         try:
             from scripts.B5_repo_ops_agent import build_repo_ops_agent, run_to_completion
-            print(">>> Import B5 OK (build_repo_ops_agent / run_to_completion available).")
+            print(">>> Import of B5 OK (build_repo_ops_agent / run_to_completion available).")
         except Exception as e:
-            print(f">>> (warn) import B5: {e}")
+            print(f">>> (warn) failed to import B5: {e}")
         return
 
     for model in MODELS:
         try:
             run_model_eval(model, client)
         except Exception as e:
-            print(f">>> [{model}] eval lỗi: {e}")
-    print(f"\n>>> Mở https://smith.langchain.com/project/{os.getenv('LANGSMITH_PROJECT','deepagents-guide')} "
-          f"-> dataset '{DATASET_NAME}' để so sánh model.")
+            print(f">>> [{model}] eval error: {e}")
+    print(f"\n>>> Open https://smith.langchain.com/project/{os.getenv('LANGSMITH_PROJECT', 'deepagents-guide')} "
+          f"-> dataset '{DATASET_NAME}' to compare models.")
 
 
 if __name__ == "__main__":
