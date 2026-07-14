@@ -48,9 +48,21 @@ to re-read the entire chat history.
 - `B8b_phoenix_eval.py`, `B12_cost_tracking.py`: started a real local Phoenix server and
   confirmed the `eval_run`/`cost_run` spans actually landed by querying Phoenix's own REST API
   directly — not just trusting each script's "wrote a span" print statement.
-- Still unverified (no LangSmith key on this machine, same caveat as the original Step 7):
-  whether traces/feedback/datasets actually reach smith.langchain.com for
-  `B7_langsmith_trace.py`, `B7b_multi_agent_trace.py`, `B8_langsmith_eval.py`.
+- **2026-07-14 update**: the user added a real `LANGSMITH_API_KEY` to `.env`. Re-verified all 3
+  remaining scripts against real LangSmith:
+  - `B7_langsmith_trace.py` / `B7b_multi_agent_trace.py`: ran both, then queried
+    `client.list_runs(project_name="deepagents-guide", is_root=True)` directly and confirmed a
+    real run landed with a matching timestamp.
+  - `B8_langsmith_eval.py`: `gpt-4o-mini` passed and pushed `pytest_pass=1.0` feedback to a real
+    run — confirmed via `client.list_feedback(run_ids=[...])` and `client.read_dataset(...)`
+    directly, not just the script's own print statement.
+  - New real finding (not a bug in this repo): `deepseek-chat-v3` hit a separate failure mode in
+    that same eval run — OpenRouter returned a tool call's `args` as a JSON-encoded string
+    instead of a parsed object, failing LangChain's message validation
+    (`tool_calls.0.args: Input should be a valid dictionary`). The per-model `try/except` in
+    `main()` caught it and the script continued to the next model, as designed.
+  - `B12_cost_tracking.py`'s LangSmith path (as opposed to its already-verified Phoenix path)
+    remains untested — not exercised in this session.
 
 ### Updated
 - All 5 scripts translated from Vietnamese to English (docstrings, comments, print/log

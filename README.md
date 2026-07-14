@@ -172,10 +172,9 @@ env -u PYTHONPATH uv run --no-sync .venv/bin/python scripts/B7_langsmith_trace.p
 env -u PYTHONPATH uv run --no-sync .venv/bin/python scripts/B7b_multi_agent_trace.py
 ```
 
-Note: the agent invocation in both scripts is live-verified (real OpenRouter calls, real output).
-The "trace actually shows up on smith.langchain.com" part is only verified as *mechanically
-correct* (a standard LangChain env var, no code required) — not tested end-to-end with a real
-LangSmith key since this machine doesn't have one.
+Verified end-to-end with a real LangSmith key: ran both scripts, then queried the LangSmith API
+directly (`client.list_runs(project_name="deepagents-guide", is_root=True)`) and confirmed a real
+run landed with a matching timestamp — not just trusting the script's own "open this URL" message.
 
 ## Step 8 — Eval: does the B5 agent still fix the bug correctly after swapping models?
 `evals/test_repo_ops_eval.py` is a plain pytest file (no LangSmith required, unlike the full eval
@@ -216,8 +215,16 @@ env -u PYTHONPATH uv run --no-sync .venv/bin/python scripts/B8b_phoenix_eval.py 
 Live-verified `B8b_phoenix_eval.py` against a real local Phoenix instance — both `gpt-4o-mini` and
 `deepseek-chat-v3` fixed the bug in that run (`pytest_pass=1.0`), and I confirmed the `eval_run`
 spans actually landed in Phoenix by querying its own API directly, not just trusting the script's
-console output. `B8_langsmith_eval.py`'s LangSmith path is unverified for the same reason as Step
-7 — no LangSmith key on this machine.
+console output.
+
+Also live-verified `B8_langsmith_eval.py` against a real LangSmith account: `gpt-4o-mini` passed
+and pushed `pytest_pass=1.0` feedback to a real run, confirmed by querying LangSmith's API
+directly for both the feedback and the `repo-ops-eval` dataset. In that same run,
+`deepseek-chat-v3` hit a real, separate failure mode — OpenRouter occasionally returns a tool
+call's `args` as a JSON-encoded string instead of a parsed object, which fails LangChain's message
+validation (`tool_calls.0.args: Input should be a valid dictionary`). The per-model `try/except`
+in `main()` caught it cleanly and the script continued to the next model — a good example of why
+that loop is wrapped in error handling at all.
 
 ## Part 2 — Real-world applications
 
